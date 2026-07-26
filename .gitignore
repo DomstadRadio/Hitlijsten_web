@@ -1,0 +1,36 @@
+# Node
+**/node_modules/
+**/build/
+**/dist/
+**/.next/
+
+# Data / SQLite / uploads
+**/data/
+
+# Environment / secrets
+.env
+.env.local
+.env*.local
+**/server.env
+Start.env
+
+# Build artifacts / tarballs
+*.tar.gz
+*.zip
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Misc
+*.tmp
+*.bak
