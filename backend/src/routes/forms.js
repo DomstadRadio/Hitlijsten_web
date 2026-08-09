@@ -30,8 +30,8 @@ function safeJson(s, fb) { try { return JSON.parse(s); } catch (_) { return fb; 
 function defaultSettings(s) {
   return {
     verify_email:    true,
-    verify_machine:  true,
-    one_per_email:   true,
+    verify_machine:  false,
+    one_per_email:   false,
     success_message: 'Bedankt voor je inzending!',
     redirect_url:    '',
     notify_email:    '',
@@ -101,6 +101,18 @@ function validateAnswers(schema, answers) {
         if (v.length > max) throw new Error(`"${f.label}" mag maximaal ${max} tracks bevatten`);
         result[f.id] = v.map(pickTrack);
         break;
+      case 'program_select': {
+        // verwacht { id, name } — valideer tegen DB
+        const db = getDb();
+        const prog = db.prepare('SELECT id, name, email FROM programs WHERE id = ? AND active = 1').get(Number(v?.id ?? v));
+        if (!prog) throw new Error(`Onbekend of inactief programma gekozen bij "${f.label || f.id}"`);
+        result[f.id] = { id: prog.id, name: prog.name, email: prog.email };
+        break;
+      }
+      case 'hidden':
+        // Waarde altijd uit het schema halen, nooit uit user-input
+        result[f.id] = f.config?.value ?? null;
+        break;
       default:
         result[f.id] = v;
     }
@@ -122,6 +134,13 @@ function pickTrack(t) {
 }
 
 // ── Public endpoints ────────────────────────────────────────────────────────
+
+// GET /api/forms/programs — actieve radioprogramma's (publiek, voor dropdown)
+router.get('/programs', (req, res) => {
+  const db = getDb();
+  const rows = db.prepare('SELECT id, name, description FROM programs WHERE active = 1 ORDER BY name ASC').all();
+  res.json(rows);
+});
 
 // GET /api/forms/:slug
 router.get('/:slug', (req, res) => {
@@ -300,6 +319,34 @@ router.post('/:slug/submit', async (req, res) => {
     }).catch(e => console.error('Form admin notificatie:', e.message));
   }
 
+  // ── Notificatie naar DJ van geselecteerd programma, of hidden email-veld ──
+  const progAnswer = Object.values(validated).find(v => v && typeof v === 'object' && v.email && v.id);
+  if (progAnswer?.email) {
+    // Radioprogramma gekozen → mail naar de DJ
+    email.sendFormAdminNotificationEmail({
+      to:       progAnswer.email,
+      formName: `${form.name} — suggestie voor ${progAnswer.name}`,
+      name:     reg.name,
+      email:    reg.email,
+      summaryHtml,
+    }).catch(e => console.error('Form DJ notificatie:', e.message));
+  } else {
+    // Geen programma gekozen → zoek hidden velden met e-mailadres als fallback
+    const fields = collectFields(form.schema);
+    const hiddenEmails = fields
+      .filter(f => f.type === 'hidden' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.config?.value || ''))
+      .map(f => f.config.value);
+    for (const to of hiddenEmails) {
+      email.sendFormAdminNotificationEmail({
+        to,
+        formName: form.name,
+        name:     reg.name,
+        email:    reg.email,
+        summaryHtml,
+      }).catch(e => console.error('Form hidden-email notificatie:', e.message));
+    }
+  }
+
   res.json({ ok: true, message: form.settings.success_message, redirect_url: form.settings.redirect_url });
 });
 
@@ -310,10 +357,14 @@ function escapeHtml(s) {
 function renderAnswerSummary(schema, answers) {
   const rows = [];
   for (const f of collectFields(schema)) {
+    if (f.type === 'hidden') continue;          // verborgen velden niet tonen
     const v = answers[f.id];
     if (v === null || v === undefined) continue;
     let html = '';
-    if (Array.isArray(v) && v.length && typeof v[0] === 'object' && v[0].title) {
+    if (typeof v === 'object' && v?.id && v?.name && v?.email) {
+      // program_select
+      html = `📻 ${escapeHtml(v.name)}`;
+    } else if (Array.isArray(v) && v.length && typeof v[0] === 'object' && v[0].title) {
       html = '<ol style="padding-left:20px;margin:4px 0">'
         + v.map(t => `<li>${escapeHtml(t.artist)} – ${escapeHtml(t.title)}</li>`).join('')
         + '</ol>';

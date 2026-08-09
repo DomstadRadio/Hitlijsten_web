@@ -66,6 +66,7 @@ export default function VotePage() {
   }, [slug]);
 
   const register = async () => {
+    if (!name.trim()) return setError('Naam is verplicht');
     if (!emailAddr) return setError('E-mailadres is verplicht');
     setError('');
     setSubmitting(true);
@@ -101,6 +102,17 @@ export default function VotePage() {
     ? { backgroundImage: `url(${list.bg_image})`, backgroundSize:'cover', backgroundPosition:'center' }
     : {};
 
+  if (list.voting_paused) {
+    return (
+      <div className="page-center" style={bgStyle}>
+        <div className="card" style={{ textAlign:'center', maxWidth:480 }}>
+          <h2>{list.name}</h2>
+          <p style={{ marginTop:12 }}>{list.voting_paused_message || 'Stemmen is tijdelijk gepauzeerd.'}</p>
+        </div>
+      </div>
+    );
+  }
+
   if (status?.status === 'closed') {
     return (
       <div className="page-center" style={bgStyle}>
@@ -135,6 +147,9 @@ export default function VotePage() {
           <p style={{ marginBottom:24 }}>
             We hebben een 6-cijferige code gestuurd naar <strong>{emailAddr}</strong>.<br />
             Voer de code hieronder in om verder te gaan.
+          </p>
+          <p style={{ marginBottom:16, fontSize:13, color:'#888', background:'#fffbe6', borderRadius:6, padding:'8px 12px' }}>
+            📬 Geen e-mail ontvangen? Controleer ook je <strong>spam-</strong> of <strong>ongewenste e-mail</strong> map.
           </p>
           <div className="form-group">
             <label>Verificatiecode</label>
@@ -205,6 +220,15 @@ export default function VotePage() {
           onClick={register} disabled={submitting}>
           {submitting ? 'Aanmelden…' : 'Aanmelden & e-mail ontvangen →'}
         </button>
+
+        {list.privacy_url
+          ? <p style={{ marginTop:12, fontSize:12, color:'#888', textAlign:'center' }}>
+              Door op aanmelden te klikken gaat u akkoord met het{' '}
+              <a href={list.privacy_url} target="_blank" rel="noopener noreferrer"
+                style={{ color:'var(--color-primary)' }}>Privacy Statement</a>.
+            </p>
+          : null
+        }
       </div>
     </div>
   );

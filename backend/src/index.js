@@ -15,6 +15,9 @@ const { router: authRouter } = require('./routes/auth');
 // DB initialiseren bij startup
 require('./db/database').getDb();
 
+// Automatische publicatie-scheduler starten
+require('./services/scheduler');
+
 const app  = express();
 const PORT = process.env.PORT || 3005;
 

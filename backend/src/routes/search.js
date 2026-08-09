@@ -31,7 +31,7 @@ function searchListTracks(slug, q) {
     if (!list) return [];
     const like = `%${q.toLowerCase()}%`;
     const rows = db.prepare(`
-      SELECT external_id, source, title, artist, album, cover_url, year
+      SELECT id, external_id, source, title, artist, album, cover_url, year
       FROM list_tracks
       WHERE list_id = ?
         AND (LOWER(title) LIKE ? OR LOWER(artist) LIKE ?)
@@ -39,14 +39,15 @@ function searchListTracks(slug, q) {
       LIMIT 20
     `).all(list.id, like, like);
     return rows.map(r => ({
-      external_id: r.external_id,
-      source:      r.source || 'playit',
-      title:       r.title,
-      artist:      r.artist,
-      album:       r.album || null,
-      cover_url:   r.cover_url || null,
-      year:        r.year || null,
-      existing:    true,
+      external_id:   r.external_id,
+      list_track_id: r.id,
+      source:        r.source || 'playit',
+      title:         r.title,
+      artist:        r.artist,
+      album:         r.album || null,
+      cover_url:     r.cover_url || null,
+      year:          r.year || null,
+      existing:      true,
     }));
   } catch (err) {
     console.warn('Zoeken in list_tracks mislukt:', err.message);
@@ -56,8 +57,12 @@ function searchListTracks(slug, q) {
 
 // GET /api/search?q=query&group=groepnaam&slug=hitlijst-slug
 router.get('/', async (req, res) => {
-  const q     = (req.query.q     || '').trim();
-  const group = (req.query.group || '').trim() || null;
+  const q      = (req.query.q      || '').trim();
+  const group  = (req.query.group  || '').trim() || null;
+  // Meerdere groepen: ?groups=a,b,c (of enkelvoudig ?group=a voor achterwaartse compatibiliteit)
+  const groups = req.query.groups
+    ? req.query.groups.split(',').map(s => s.trim()).filter(Boolean)
+    : (group ? [group] : []);
   const slug  = (req.query.slug  || '').trim() || null;
   // Optionele expliciete bronnen-filter: ?sources=playit,spotify
   // Standaard (geen param) = oude gedrag: PlayIt + alleen Spotify als aanvulling.
@@ -84,25 +89,30 @@ router.get('/', async (req, res) => {
     const merged = [];
 
     // 1. Eerst bestaande tracks in deze lijst (alleen als er een slug is en geen groepfilter)
-    if (slug && !group && wantPlayIt) {
+    if (slug && !groups.length && wantPlayIt) {
       addUnique(merged, searchListTracks(slug, q));
     }
 
-    // 2. PlayIt Live
+    // 2. PlayIt Live — bij meerdere groepen: zoek in elke groep en merge
     if (wantPlayIt) {
       try {
-        const playitResults = await playit.searchTracks(q, group);
-        addUnique(merged, playitResults);
+        if (groups.length <= 1) {
+          const playitResults = await playit.searchTracks(q, groups[0] || null);
+          addUnique(merged, playitResults);
+        } else {
+          for (const g of groups) {
+            const playitResults = await playit.searchTracks(q, g);
+            addUnique(merged, playitResults);
+          }
+        }
       } catch (e) {
         console.warn('PlayIt search mislukt:', e.message);
       }
     }
 
     // 3. Spotify
-    //    - Bij expliciete sources-param: altijd zoeken als 'spotify' is opgegeven (groep wordt genegeerd voor Spotify).
-    //    - Zonder param: oude gedrag — alleen aanvullen bij weinig resultaten en geen groep.
-    const spotifyForced = sources && wantSpotify;
-    const spotifyFallback = !sources && wantSpotify && merged.length < 5 && !group;
+    const spotifyForced  = sources && wantSpotify;
+    const spotifyFallback = !sources && wantSpotify && merged.length < 5 && !groups.length;
     if (spotifyForced || spotifyFallback) {
       try {
         const spotifyResults = await spotify.searchTracks(q);

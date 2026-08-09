@@ -32,7 +32,16 @@ if [ "$DO_BACKEND" = "1" ]; then
   $SCP -r backend/src backend/package.json backend/package-lock.json $HOST:$REMOTE/backend/
 
   echo "=== Backend: dependencies (alleen indien gewijzigd) ==="
-  $SSH $HOST "cd $REMOTE/backend && npm install --omit=dev --no-audit --no-fund"
+  $SSH $HOST "
+    cd $REMOTE/backend
+    NEW=\$(md5sum package-lock.json | cut -d' ' -f1)
+    OLD=\$(cat .npm-lock-hash 2>/dev/null || echo '')
+    if [ \"\$NEW\" != \"\$OLD\" ]; then
+      npm install --omit=dev --no-audit --no-fund && echo \$NEW > .npm-lock-hash
+    else
+      echo 'Dependencies ongewijzigd, skip install.'
+    fi
+  "
 
   echo "=== Backend: PM2 herstarten ==="
   $SSH $HOST "pm2 restart hitlijsten --update-env || pm2 start $REMOTE/backend/src/index.js --name hitlijsten --update-env"
@@ -45,7 +54,17 @@ if [ "$DO_FRONTEND" = "1" ]; then
   $SCP -r frontend/src frontend/public frontend/package.json frontend/package-lock.json $HOST:$REMOTE/frontend/
 
   echo "=== Frontend: dependencies + build op server ==="
-  $SSH $HOST "cd $REMOTE/frontend && npm install --legacy-peer-deps --no-audit --no-fund && CI=false npm run build"
+  $SSH $HOST "
+    cd $REMOTE/frontend
+    NEW=\$(md5sum package-lock.json | cut -d' ' -f1)
+    OLD=\$(cat .npm-lock-hash 2>/dev/null || echo '')
+    if [ \"\$NEW\" != \"\$OLD\" ]; then
+      npm install --legacy-peer-deps --no-audit --no-fund && echo \$NEW > .npm-lock-hash
+    else
+      echo 'Dependencies ongewijzigd, skip install.'
+    fi
+    CI=false GENERATE_SOURCEMAP=false NODE_OPTIONS=--max_old_space_size=512 npm run build
+  "
 fi
 
 echo ""

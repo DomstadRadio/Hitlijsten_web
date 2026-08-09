@@ -62,7 +62,11 @@ router.get('/by-domain', (req, res) => {
 // GET /api/lists
 router.get('/', (req, res) => {
   const lists = getDb().prepare('SELECT * FROM lists ORDER BY created_at DESC').all();
-  res.json(lists.map(l => ({ ...l, theme: JSON.parse(l.theme || '{}') })));
+  res.json(lists.map(l => ({
+    ...l,
+    theme: JSON.parse(l.theme || '{}'),
+    score_rules: l.score_rules ? JSON.parse(l.score_rules) : null,
+  })));
 });
 
 // GET /api/lists/:slug
@@ -76,12 +80,17 @@ router.get('/:slug', (req, res) => {
     .prepare('SELECT * FROM list_tracks WHERE list_id = ? ORDER BY artist, title')
     .all(list.id);
 
-  res.json({ ...list, theme: JSON.parse(list.theme || '{}'), tracks });
+  res.json({
+    ...list,
+    theme: JSON.parse(list.theme || '{}'),
+    score_rules: list.score_rules ? JSON.parse(list.score_rules) : null,
+    tracks,
+  });
 });
 
 // POST /api/lists
 router.post('/', ...requirePerm('lists'), upload.single('bg_image'), (req, res) => {
-  const { name, slug, description, domain, max_votes, closes_at, theme, playit_group, redirect_url } = req.body;
+  const { name, slug, description, domain, max_votes, closes_at, theme, playit_group, redirect_url, privacy_url } = req.body;
   if (!name || !slug) return res.status(400).json({ error: 'name en slug zijn verplicht' });
 
   const slugClean = slug.toLowerCase().replace(/[^a-z0-9-]/g, '-');
@@ -90,11 +99,11 @@ router.post('/', ...requirePerm('lists'), upload.single('bg_image'), (req, res) 
 
   try {
     const info = getDb().prepare(`
-      INSERT INTO lists (name, slug, description, domain, max_votes, closes_at, theme, bg_image, playit_group, redirect_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO lists (name, slug, description, domain, max_votes, closes_at, theme, bg_image, playit_group, redirect_url, privacy_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(name, slugClean, description || null, domain || null,
            Number(max_votes) || 10, closes_at || null, themeJson, bg_image,
-           playit_group || null, redirect_url || null);
+           playit_group || null, redirect_url || null, privacy_url || null);
 
     const list = getDb().prepare('SELECT * FROM lists WHERE id = ?').get(info.lastInsertRowid);
     res.status(201).json({ ...list, theme: JSON.parse(list.theme) });
@@ -111,7 +120,8 @@ router.put('/:id', ...requirePerm('lists'), upload.single('bg_image'), (req, res
   if (!list) return res.status(404).json({ error: 'Niet gevonden' });
 
   const {
-    name, description, domain, status, max_votes, closes_at, theme, playit_group, redirect_url
+    name, description, domain, status, max_votes, closes_at, theme, playit_group, redirect_url,
+    reminder_subject, reminder_html, privacy_url
   } = req.body;
 
   const bg_image  = req.file ? `/uploads/${req.file.filename}` : list.bg_image;
@@ -121,7 +131,8 @@ router.put('/:id', ...requirePerm('lists'), upload.single('bg_image'), (req, res
 
   db.prepare(`
     UPDATE lists
-    SET name=?, description=?, domain=?, status=?, max_votes=?, closes_at=?, theme=?, bg_image=?, playit_group=?, redirect_url=?
+    SET name=?, description=?, domain=?, status=?, max_votes=?, closes_at=?, theme=?, bg_image=?,
+        playit_group=?, redirect_url=?, reminder_subject=?, reminder_html=?, privacy_url=?
     WHERE id=?
   `).run(
     name ?? list.name,
@@ -134,6 +145,9 @@ router.put('/:id', ...requirePerm('lists'), upload.single('bg_image'), (req, res
     bg_image,
     playit_group !== undefined ? (playit_group || null) : list.playit_group,
     redirect_url !== undefined ? (redirect_url || null) : list.redirect_url,
+    reminder_subject !== undefined ? (reminder_subject || null) : list.reminder_subject,
+    reminder_html    !== undefined ? (reminder_html    || null) : list.reminder_html,
+    privacy_url      !== undefined ? (privacy_url      || null) : list.privacy_url,
     list.id
   );
 
@@ -223,6 +237,7 @@ router.get('/:id/results', (req, res) => {
     WHERE lt.list_id = ?
     GROUP BY lt.id
     ORDER BY score DESC, vote_count DESC
+    LIMIT 100
   `).all(req.params.id);
 
   res.json({ list: { ...list, theme: JSON.parse(list.theme) }, results });

@@ -26,6 +26,21 @@ export default function VotersView({ list }) {
   const [search,  setSearch]  = useState('');
   const [expanded, setExpanded] = useState(null); // `${trackId}-${regId}`
 
+  const exportCsv = async () => {
+    const token = localStorage.getItem('hitlijsten_token');
+    const res = await fetch(`${API}/lists/${list.id}/registrations/export.csv`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) { alert('Export mislukt'); return; }
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `${list.slug || list.id}-deelnemers.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -77,6 +92,7 @@ export default function VotersView({ list }) {
           style={{ flex:1 }}
         />
         <button className="btn btn-sm btn-outline" onClick={load}>↻ Vernieuwen</button>
+        <button className="btn btn-sm btn-outline" onClick={exportCsv}>⬇ Exporteer CSV</button>
       </div>
 
       {loading ? <p>Laden…</p> : error ? (

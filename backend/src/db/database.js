@@ -26,13 +26,76 @@ function getDb() {
   _db = new Database(DB_PATH);
   _db.pragma('journal_mode = WAL');
   _db.pragma('foreign_keys = ON');
+  _db.pragma('synchronous = NORMAL');    // veilig met WAL, minder fsync
+  _db.pragma('cache_size = -32000');    // 32 MB page cache
+  _db.pragma('temp_store = MEMORY');    // temp tabellen in RAM
+  _db.pragma('mmap_size = 134217728'); // 128 MB memory-mapped I/O
   migrate(_db);
   // Veilig upgraden van bestaande databases
-  safeAddColumn(_db, 'lists',         'playit_group', 'TEXT');
-  safeAddColumn(_db, 'registrations', 'approved',     'INTEGER DEFAULT NULL');
-  safeAddColumn(_db, 'registrations', 'verify_code',  'TEXT');
-  // Index op approved (kan falen als kolom nog niet bestaat — wordt genegeerd)
+  safeAddColumn(_db, 'lists',         'playit_group',      'TEXT');
+  safeAddColumn(_db, 'registrations', 'approved',          'INTEGER DEFAULT NULL');
+  safeAddColumn(_db, 'registrations', 'verify_code',       'TEXT');
+  safeAddColumn(_db, 'registrations', 'reminder_sent_at',  'TEXT DEFAULT NULL');
+  // Feature: flexibele puntentelling
+  safeAddColumn(_db, 'lists',         'score_rules',        'TEXT DEFAULT NULL');  // JSON: [10,7,5,…]
+  safeAddColumn(_db, 'list_tracks',   'score_adjustment',   'INTEGER DEFAULT 0');  // handmatige bonus/malus
+  // Feature: aanpasbare herinnerings-e-mail per lijst
+  safeAddColumn(_db, 'lists',         'reminder_subject',       'TEXT DEFAULT NULL');
+  safeAddColumn(_db, 'lists',         'reminder_html',          'TEXT DEFAULT NULL');
+  // Feature: automatisch publiceren + stemmen pauzeren
+  safeAddColumn(_db, 'lists',         'auto_publish_cron',       'TEXT DEFAULT NULL');   // bijv. "0 7 * * 5" = vrijdag 07:00
+  safeAddColumn(_db, 'lists',         'voting_paused',           'INTEGER DEFAULT 0');
+  safeAddColumn(_db, 'lists',         'voting_paused_message',   'TEXT DEFAULT NULL');
+  // Feature: privacy statement link
+  safeAddColumn(_db, 'lists',         'privacy_url',             'TEXT DEFAULT NULL');
+  // Feature: audit log tabel
+  try {
+    _db.exec(`
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts       TEXT NOT NULL DEFAULT (datetime('now')),
+        actor    TEXT,
+        action   TEXT NOT NULL,
+        list_id  INTEGER,
+        target   TEXT,
+        detail   TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_ts      ON audit_log(ts DESC);
+      CREATE INDEX IF NOT EXISTS idx_audit_list    ON audit_log(list_id, ts DESC);
+      CREATE INDEX IF NOT EXISTS idx_audit_action  ON audit_log(action, ts DESC);
+    `);
+  } catch (_) {}
+  // Feature: radioprogramma's voor formulieren
+  try {
+    _db.exec(`
+      CREATE TABLE IF NOT EXISTS programs (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        name        TEXT NOT NULL,
+        email       TEXT NOT NULL,
+        description TEXT,
+        active      INTEGER NOT NULL DEFAULT 1,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+  } catch (_) {}
+  // Indices (kunnen falen als kolom nog niet bestaat — wordt genegeerd)
   try { _db.exec('CREATE INDEX IF NOT EXISTS idx_reg_approved ON registrations(list_id, approved)'); } catch (_) {}
+  try { _db.exec('CREATE INDEX IF NOT EXISTS idx_reg_reminder ON registrations(list_id, reminder_sent_at)'); } catch (_) {}
+  // Feature: blokkeerlijst
+  try {
+    _db.exec(`
+      CREATE TABLE IF NOT EXISTS blocked_voters (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        list_id    INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+        email      TEXT,
+        machine_id TEXT,
+        reason     TEXT,
+        blocked_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_blocked_list ON blocked_voters(list_id);
+      CREATE INDEX IF NOT EXISTS idx_blocked_email ON blocked_voters(list_id, email);
+    `);
+  } catch (_) {}
 
   // Dedupliceer list_tracks op (list_id, lower(artist), lower(title)) en zet unique index
   dedupeListTracks(_db);

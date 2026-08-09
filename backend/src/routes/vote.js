@@ -10,6 +10,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../db/database');
 const email = require('../services/email');
+const { logAction } = require('../utils/audit');
 
 const router = express.Router();
 
@@ -22,15 +23,31 @@ router.post('/:slug/register', async (req, res) => {
   const list = db.prepare('SELECT * FROM lists WHERE slug = ?').get(req.params.slug);
   if (!list)  return res.status(404).json({ error: 'Lijst niet gevonden' });
   if (list.status !== 'open') return res.status(403).json({ error: 'Stemmen is gesloten' });
+  if (list.voting_paused) return res.status(403).json({ error: list.voting_paused_message || 'Stemmen is tijdelijk gepauzeerd', paused: true });
 
   const { emailAddr, name, phone, machineId } = req.body;
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Naam is verplicht' });
   if (!emailAddr) return res.status(400).json({ error: 'E-mailadres is verplicht' });
 
-  // Controleer of machineId al gestemd heeft
+  // Controleer blokkeerlijst (op email én machine_id)
+  const isBlocked = db.prepare(`
+    SELECT id FROM blocked_voters
+    WHERE list_id = ?
+      AND (
+        (email IS NOT NULL AND lower(email) = lower(?))
+        OR (machine_id IS NOT NULL AND machine_id = ? AND ? IS NOT NULL)
+      )
+    LIMIT 1
+  `).get(list.id, emailAddr, machineId || '', machineId || null);
+  if (isBlocked) return res.status(403).json({ error: 'Je kunt niet deelnemen aan deze stemming' });
+
+  // Controleer of machineId al gestemd heeft (alleen als er daadwerkelijk votes zijn)
   if (machineId && !isWhitelisted(machineId)) {
-    const existing = db.prepare(
-      'SELECT id FROM registrations WHERE list_id = ? AND machine_id = ? AND verified = 1'
-    ).get(list.id, machineId);
+    const existing = db.prepare(`
+      SELECT r.id FROM registrations r
+      WHERE r.list_id = ? AND r.machine_id = ? AND r.verified = 1
+        AND EXISTS (SELECT 1 FROM votes v WHERE v.registration_id = r.id)
+    `).get(list.id, machineId);
     if (existing) return res.status(409).json({ error: 'Je hebt al gestemd vanaf dit apparaat' });
   }
 
@@ -40,7 +57,9 @@ router.post('/:slug/register', async (req, res) => {
   ).get(list.id, emailAddr.toLowerCase());
 
   if (existingEmail?.verified && !isWhitelisted(machineId)) {
-    return res.status(409).json({ error: 'Dit e-mailadres heeft al gestemd' });
+    // Alleen blokkeren als er ook daadwerkelijk gestemd is
+    const hasVoted = db.prepare('SELECT id FROM votes WHERE registration_id = ?').get(existingEmail.id);
+    if (hasVoted) return res.status(409).json({ error: 'Dit e-mailadres heeft al gestemd' });
   }
 
   const token = uuidv4();
@@ -98,6 +117,7 @@ router.post('/:slug/verify-code', (req, res) => {
     listSlug:       list.slug,
     maxVotes:       list.max_votes,
     listName:       list.name,
+    scoreRules:     list.score_rules ? JSON.parse(list.score_rules) : null,
   });
 });
 
@@ -127,6 +147,7 @@ router.get('/:slug/verify/:token', (req, res) => {
     listSlug: list.slug,
     maxVotes: list.max_votes,
     listName: list.name,
+    scoreRules: list.score_rules ? JSON.parse(list.score_rules) : null,
   });
 });
 
@@ -136,6 +157,7 @@ router.post('/:slug/submit', async (req, res) => {
   const list = db.prepare('SELECT * FROM lists WHERE slug = ?').get(req.params.slug);
   if (!list)  return res.status(404).json({ error: 'Lijst niet gevonden' });
   if (list.status !== 'open') return res.status(403).json({ error: 'Stemmen is gesloten' });
+  if (list.voting_paused) return res.status(403).json({ error: list.voting_paused_message || 'Stemmen is tijdelijk gepauzeerd', paused: true });
 
   const { token, votes, comment } = req.body;
   // votes = [{ external_id, source, title, artist, album, cover_url, year, position }]
@@ -151,6 +173,12 @@ router.post('/:slug/submit', async (req, res) => {
   // Valideer dat elke stem een external_id heeft
   if (votes.some(v => !v.external_id || !v.title || !v.artist)) {
     return res.status(400).json({ error: 'Ongeldige track-gegevens' });
+  }
+
+  // Voorkom dubbele tracks in dezelfde inzending
+  const uniqueIds = new Set(votes.map(v => v.external_id));
+  if (uniqueIds.size !== votes.length) {
+    return res.status(400).json({ error: 'Je kunt niet twee keer dezelfde track kiezen' });
   }
 
   const reg = db.prepare(
@@ -247,6 +275,9 @@ router.post('/:slug/submit', async (req, res) => {
     console.error('Bevestigingsmail mislukt:', mailErr.message);
     // Niet fataal — stem is al opgeslagen
   }
+
+  logAction({ actor: 'public', action: 'vote.cast', list_id: list.id,
+    target: reg.email, detail: { name: reg.name, trackCount: resolvedTracks.length } });
 
   res.json({ ok: true });
 });

@@ -11,6 +11,7 @@ const express  = require('express');
 const bcrypt   = require('bcryptjs');
 const jwt      = require('jsonwebtoken');
 const { getDb } = require('../db/database');
+const { logAction } = require('../utils/audit');
 
 const router = express.Router();
 
@@ -86,6 +87,7 @@ router.post('/login', (req, res) => {
   }
 
   const token = signToken(user);
+  logAction({ actor: user.username, action: 'login', detail: { ip: req.ip || req.headers['x-forwarded-for'] } });
   res.json({
     token,
     user: { id: user.id, username: user.username, role: user.role, permissions: user.permissions },

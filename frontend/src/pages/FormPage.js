@@ -185,7 +185,7 @@ export default function FormPage() {
 function collectMissing(schema, answers) {
   const out = [];
   for (const p of schema.pages) for (const f of p.fields) {
-    if (!f.required) continue;
+    if (!f.required || f.type === 'hidden') continue;
     const v = answers[f.id];
     const empty = v === undefined || v === null || v === '' ||
                   (Array.isArray(v) && v.length === 0);
@@ -197,6 +197,9 @@ function collectMissing(schema, answers) {
 // ── Field renderer ──────────────────────────────────────────────────────────
 
 function FieldRenderer({ field, value, onChange }) {
+  // Verborgen velden niet tonen
+  if (field.type === 'hidden') return null;
+
   const label = (
     <div style={{ fontWeight: 600, marginBottom: 4 }}>
       {field.label}{field.required && <span style={{ color: '#c00' }}> *</span>}
@@ -275,9 +278,55 @@ function FieldRenderer({ field, value, onChange }) {
         </div>
       );
     }
+    case 'program_select': {
+      return (
+        <div style={fieldWrap}>
+          {label}
+          <ProgramPicker value={value} onChange={onChange} required={field.required} />
+          {help}
+        </div>
+      );
+    }
     default:
       return <div style={fieldWrap}>{label}<em>Onbekend veldtype: {field.type}</em></div>;
   }
+}
+
+// ── Program picker ──────────────────────────────────────────────────────────
+
+function ProgramPicker({ value, onChange, required }) {
+  const [programs, setPrograms] = useState([]);
+
+  useEffect(() => {
+    axios.get(`${API}/forms/programs`)
+      .then(r => setPrograms(r.data))
+      .catch(() => {});
+  }, []);
+
+  const selected = value?.id ? String(value.id) : '';
+
+  const handleChange = (e) => {
+    const id = Number(e.target.value);
+    if (!id) { onChange(null); return; }
+    const prog = programs.find(p => p.id === id);
+    if (prog) onChange({ id: prog.id, name: prog.name });
+  };
+
+  return (
+    <select
+      value={selected}
+      onChange={handleChange}
+      required={required}
+      style={{ padding: '8px 10px', border: '1px solid #ccc', borderRadius: 6, fontSize: 15, width: '100%' }}
+    >
+      <option value="">Kies een radioprogramma{required ? '' : ' (optioneel)'}</option>
+      {programs.map(p => (
+        <option key={p.id} value={String(p.id)}>
+          {p.name}{p.description ? ` — ${p.description}` : ''}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 // ── Track picker (fase 2) ───────────────────────────────────────────────────
@@ -288,7 +337,10 @@ function TrackPicker({ mode, topN = 5, config = {}, value, onChange }) {
   const [searching, setSearching] = useState(false);
   const debounceRef = useRef(null);
 
-  const group   = config.trackgroup || null;
+  // Ondersteuning voor zowel nieuw (trackgroups array) als oud (trackgroup string)
+  const groups  = Array.isArray(config.trackgroups) && config.trackgroups.length
+    ? config.trackgroups
+    : (config.trackgroup ? [config.trackgroup] : []);
   const sources = Array.isArray(config.sources) && config.sources.length
     ? config.sources : ['playit', 'spotify'];
 
@@ -306,7 +358,8 @@ function TrackPicker({ mode, topN = 5, config = {}, value, onChange }) {
       setSearching(true);
       try {
         const params = { q: query, sources: sources.join(',') };
-        if (group) params.group = group;
+        if (groups.length === 1) params.group = groups[0];
+        else if (groups.length > 1) params.groups = groups.join(',');
         const res = await axios.get(`${API}/search`, { params });
         const filtered = res.data
           .filter(r => !selected.some(s => trackKey(s) === trackKey(r)));
@@ -318,7 +371,7 @@ function TrackPicker({ mode, topN = 5, config = {}, value, onChange }) {
       }
     }, 300);
     return () => clearTimeout(debounceRef.current);
-  }, [query, JSON.stringify(selected.map(trackKey)), group, sources.join(',')]);
+  }, [query, JSON.stringify(selected.map(trackKey)), JSON.stringify(groups), sources.join(',')]);
 
   const addTrack = (t) => {
     if (selected.length >= max) return;

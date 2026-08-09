@@ -56,7 +56,7 @@ async function sendVerificationEmail({ to, name, listName, code }) {
             ${code}
           </span>
         </p>
-        <p>De code is 24 uur geldig.</p>
+        <p>Stem op tijd, de link is beperkt geldig.</p>
         <p style="font-size:12px;color:#888">Als je je niet hebt aangemeld, kun je deze e-mail negeren.</p>
         <hr>
         <p style="font-size:11px;color:#aaa">Domstad Radio — Utrecht</p>
@@ -85,21 +85,14 @@ async function sendVoteConfirmationEmail({ to, name, listName, tracks }) {
   });
 }
 
-async function sendVoteApprovedEmail({ to, name, listName, approvedTracks, rejectedTracks }) {
-  const approved = approvedTracks.map((t, i) => `<li>${i + 1}. ${t.artist} – ${t.title}</li>`).join('');
-  const rejected = rejectedTracks.length
-    ? `<p><strong>Niet opgenomen:</strong></p><ul>${rejectedTracks.map(t => `<li>${t.artist} – ${t.title}</li>`).join('')}</ul>`
-    : '';
+async function sendVoteApprovedEmail({ to, name, listName }) {
   await sendMail({
     to,
-    subject: `Je keuzes voor ${listName} zijn verwerkt`,
+    subject: `Je stemmen voor ${listName} zijn verwerkt`,
     html: `
       <div style="font-family:sans-serif;max-width:560px;margin:auto">
         <h2>Hallo ${name || ''}!</h2>
-        <p>Je keuzes voor <strong>${listName}</strong> zijn beoordeeld en verwerkt in de hitlijst.</p>
-        <p><strong>Opgenomen nummers:</strong></p>
-        <ol style="padding-left:20px">${approved}</ol>
-        ${rejected}
+        <p>Je stemmen voor <strong>${listName}</strong> zijn verwerkt.</p>
         <hr>
         <p style="font-size:11px;color:#aaa">Domstad Radio — Utrecht</p>
       </div>
@@ -108,7 +101,8 @@ async function sendVoteApprovedEmail({ to, name, listName, approvedTracks, rejec
 }
 
 module.exports = { sendMail, sendVerificationEmail, sendVoteConfirmationEmail, sendVoteApprovedEmail,
-                   sendFormVerificationEmail, sendFormResponseEmail, sendFormAdminNotificationEmail };
+                   sendFormVerificationEmail, sendFormResponseEmail, sendFormAdminNotificationEmail,
+                   sendNoVoteReminderEmail };
 
 async function sendFormVerificationEmail({ to, name, formName, code }) {
   await sendMail({
@@ -154,4 +148,45 @@ async function sendFormAdminNotificationEmail({ to, formName, name, email, summa
         <hr><p style="font-size:11px;color:#aaa">Domstad Radio — automatische notificatie</p>
       </div>`,
   });
+}
+
+/**
+ * Herinnerings-e-mail voor mensen die zich wel aangemeld hebben maar nog
+ * niet gestemd hebben. De voteUrl is de publieke stempagina van de lijst.
+ */
+async function sendNoVoteReminderEmail({ to, name, listName, voteUrl, customSubject, customHtml }) {
+  // Vul variabelen in bij custom template
+  const fill = (str) => str
+    .replace(/\{\{naam\}\}/gi,  name     || 'stemmer')
+    .replace(/\{\{lijst\}\}/gi, listName || '')
+    .replace(/\{\{url\}\}/gi,   voteUrl  || '#');
+
+  const subject = customSubject
+    ? fill(customSubject)
+    : `Vergeet niet te stemmen voor ${listName}!`;
+
+  const html = customHtml
+    ? fill(customHtml)
+    : `
+      <div style="font-family:sans-serif;max-width:560px;margin:auto">
+        <h2>Hoi ${name || 'stemmer'}!</h2>
+        <p>Je hebt je aangemeld om te stemmen voor <strong>${listName}</strong>, maar we hebben je stem nog niet ontvangen.</p>
+        <p>Er is nog tijd — klik op de knop hieronder en breng nu je stem uit:</p>
+        <p style="text-align:center;margin:32px 0">
+          <a href="${voteUrl}"
+             style="display:inline-block;background:#e00;color:#fff;text-decoration:none;
+                    padding:14px 32px;border-radius:8px;font-size:18px;font-weight:bold">
+            Stem nu!
+          </a>
+        </p>
+        <p style="font-size:12px;color:#888">Of kopieer deze link: <a href="${voteUrl}">${voteUrl}</a></p>
+        <p style="font-size:12px;color:#888">
+          Als je niet meer wilt stemmen, kun je deze e-mail gewoon negeren.
+        </p>
+        <hr>
+        <p style="font-size:11px;color:#aaa">Domstad Radio — Utrecht</p>
+      </div>
+    `;
+
+  await sendMail({ to, subject, html });
 }

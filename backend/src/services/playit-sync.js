@@ -1,6 +1,6 @@
 /**
  * PlayIt Live sync service.
- * Synchroniseert alle trackgroepen (type=Listed) en hun tracks naar de lokale database,
+ * Synchroniseert alle trackgroepen en hun tracks naar de lokale database,
  * zodat zoekopdrachten sneller kunnen plaatsvinden zonder API-calls.
  *
  * Gebruik:
@@ -108,12 +108,12 @@ async function syncAll() {
       INSERT OR IGNORE INTO playit_track_groups (track_guid, group_guid) VALUES (?, ?)
     `);
 
-    const listedGroups = groups.filter(g => g.type === 'Listed');
+    // Sync alle groepstypes — Filtered/Grouped worden geprobeerd, falen gracefully
     let idx = 0;
 
-    for (const group of listedGroups) {
+    for (const group of groups) {
       idx++;
-      _status.progress = `Groep ${idx}/${listedGroups.length}: ${group.name}…`;
+      _status.progress = `Groep ${idx}/${groups.length}: ${group.name}…`;
 
       try {
         const trRes = await api.get(`/trackGroups/listed/${group.guid}`);

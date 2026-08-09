@@ -13,6 +13,8 @@ const FIELD_TYPES = [
   { type: 'checkbox',     label: 'Checkbox (meerdere)' },
   { type: 'track_single', label: 'Track-picker enkel (fase 2)' },
   { type: 'track_topN',   label: 'Track-picker top-N (fase 2)' },
+  { type: 'program_select', label: '📻 Radioprogramma kiezen' },
+  { type: 'hidden',         label: '🔒 Verborgen veld' },
 ];
 
 const newId = () => 'f_' + Math.random().toString(36).slice(2, 9);
@@ -175,13 +177,13 @@ export default function FormBuilder({ form: initial, onBack, onSaved }) {
           </label>
           <div style={twoCol}>
             <label style={chk}>
-              <input type="checkbox" checked={!!form.settings.verify_email}    onChange={e => updateSettings({ verify_email: e.target.checked })} /> E-mailverificatie
+              <input type="checkbox" checked={!!form.settings.verify_email}    onChange={e => updateSettings({ verify_email: e.target.checked })} /> E-mailverificatie vereisen
             </label>
             <label style={chk}>
-              <input type="checkbox" checked={!!form.settings.verify_machine}  onChange={e => updateSettings({ verify_machine: e.target.checked })} /> Machine-id check
+              <input type="checkbox" checked={!!form.settings.verify_machine}  onChange={e => updateSettings({ verify_machine: e.target.checked })} /> Max. 1x per apparaat
             </label>
             <label style={chk}>
-              <input type="checkbox" checked={!!form.settings.one_per_email}   onChange={e => updateSettings({ one_per_email: e.target.checked })} /> 1 inzending per e-mail
+              <input type="checkbox" checked={!!form.settings.one_per_email}   onChange={e => updateSettings({ one_per_email: e.target.checked })} /> Max. 1x per e-mailadres
             </label>
             <label style={chk}>
               <input type="checkbox" checked={form.settings.confirm_email !== false} onChange={e => updateSettings({ confirm_email: e.target.checked })} /> Bevestiging naar inzender
@@ -332,7 +334,11 @@ function FieldRow({ field, selected, onSelect, onRemove }) {
         <div style={{ fontSize: 12, color: '#888', textTransform: 'uppercase' }}>
           ⋮⋮ {typeMeta?.label || field.type}{field.required ? ' *' : ''}
         </div>
-        <div style={{ fontWeight: 600 }}>{field.label || '(zonder label)'}</div>
+        <div style={{ fontWeight: 600 }}>
+          {field.type === 'hidden'
+            ? (field.config?.value ? `🔒 ${field.config.value}` : '🔒 (geen waarde)')
+            : (field.label || '(zonder label)')}
+        </div>
       </div>
       <button className="btn btn-sm btn-outline" style={{ color: '#c00' }} onClick={(e) => { e.stopPropagation(); onRemove(); }}>×</button>
     </div>
@@ -341,18 +347,25 @@ function FieldRow({ field, selected, onSelect, onRemove }) {
 
 function FieldEditor({ field, onChange }) {
   const isOpts = field.type === 'radio' || field.type === 'checkbox';
+  const isHidden = field.type === 'hidden';
   return (
     <div>
       <h4 style={{ marginTop: 0 }}>Veld bewerken</h4>
-      <label style={lbl}>Label
-        <input value={field.label || ''} onChange={e => onChange({ label: e.target.value })} style={inp} />
-      </label>
-      <label style={lbl}>Hulptekst
-        <input value={field.help || ''} onChange={e => onChange({ help: e.target.value })} style={inp} />
-      </label>
-      <label style={chk}>
-        <input type="checkbox" checked={!!field.required} onChange={e => onChange({ required: e.target.checked })} /> Verplicht
-      </label>
+      {!isHidden && (
+        <label style={lbl}>Label
+          <input value={field.label || ''} onChange={e => onChange({ label: e.target.value })} style={inp} />
+        </label>
+      )}
+      {!isHidden && (
+        <label style={lbl}>Hulptekst
+          <input value={field.help || ''} onChange={e => onChange({ help: e.target.value })} style={inp} />
+        </label>
+      )}
+      {!isHidden && (
+        <label style={chk}>
+          <input type="checkbox" checked={!!field.required} onChange={e => onChange({ required: e.target.checked })} /> Verplicht
+        </label>
+      )}
 
       {isOpts && (
         <div>
@@ -393,6 +406,30 @@ function FieldEditor({ field, onChange }) {
       {(field.type === 'track_single' || field.type === 'track_topN') && (
         <TrackFieldConfig field={field} onChange={onChange} />
       )}
+
+      {field.type === 'program_select' && (
+        <p style={{ margin: '6px 0 0', color: '#555', fontSize: 13 }}>
+          📻 Toont een dropdown met actieve radioprogramma's. Bij het indienen van het formulier
+          ontvangt de DJ van het gekozen programma automatisch een e-mailnotificatie.
+        </p>
+      )}
+
+      {field.type === 'hidden' && (
+        <>
+          <label style={lbl}>Vaste waarde
+            <input
+              value={field.config?.value || ''}
+              onChange={e => onChange({ config: { ...(field.config || {}), value: e.target.value } })}
+              placeholder="bijv. dj@domstad.nl"
+              style={inp}
+            />
+          </label>
+          <p style={{ margin: '6px 0 0', color: '#555', fontSize: 13 }}>
+            🔒 Dit veld is <strong>niet zichtbaar</strong> voor invullers. Als de waarde een e-mailadres is,
+            wordt de inzending naar dat adres gemaild wanneer er geen radioprogramma is gekozen.
+          </p>
+        </>
+      )}
     </div>
   );
 }
@@ -417,19 +454,19 @@ function TrackFieldConfig({ field, onChange }) {
     <div style={{ marginTop: 8, padding: 8, border: '1px dashed #ccc', borderRadius: 6 }}>
       <h5 style={{ margin: '0 0 6px' }}>Track-bron</h5>
 
-      <label style={lbl}>PlayIt trackgroep (filter)
+      <label style={lbl}>PlayIt trackgroepen (filter, meerdere mogelijk)
         <select
-          value={cfg.trackgroup || ''}
-          onChange={e => setCfg({ trackgroup: e.target.value || null })}
-          style={inp}
+          multiple
+          value={Array.isArray(cfg.trackgroups) ? cfg.trackgroups : (cfg.trackgroup ? [cfg.trackgroup] : [])}
+          onChange={e => setCfg({ trackgroups: Array.from(e.target.selectedOptions).map(o => o.value), trackgroup: null })}
+          style={{ ...inp, height: Math.min(Math.max(groups.length, 3), 8) * 28 + 'px' }}
         >
-          <option value="">— alle groepen —</option>
           {groups.map(g => {
-            // /api/search/groups kan strings of objects teruggeven
             const name = typeof g === 'string' ? g : (g.name || g.title || g.groupName || '');
             return name ? <option key={name} value={name}>{name}</option> : null;
           })}
         </select>
+        <span style={{ fontSize: 12, color: '#888' }}>Ctrl+klik om meerdere te selecteren. Niets geselecteerd = alle groepen.</span>
       </label>
 
       <div style={{ marginBottom: 6 }}>

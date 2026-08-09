@@ -1,18 +1,20 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import { useAuth } from '../context/AuthContext';
 
 const API = '/api';
 
-/**
- * Live admin-overzicht van de huidige stand van een hitlijst.
- * Toont score (zelfde formule als publish) + aantal stemmen per track.
- */
 export default function ChartView({ list }) {
+  const { hasPerm } = useAuth();
   const [data, setData]         = useState(null);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState('');
   const [includeAll, setIncl]   = useState(false);
   const [showZero, setShowZero] = useState(false);
+  const [editAdj, setEditAdj]   = useState({}); // trackId → string (tijdelijk invoerveld)
+  const [savingAdj, setSavingAdj] = useState({}); // trackId → bool
+  const [publishing, setPublishing] = useState(false);
+  const [publishResult, setPublishResult] = useState(null); // { week, year, trackCount }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -21,6 +23,10 @@ export default function ChartView({ list }) {
       const params = includeAll ? { includeAll: 1 } : {};
       const res = await axios.get(`${API}/admin/chart-live/${list.id}`, { params });
       setData(res.data);
+      // Initialiseer invoervelden vanuit huidige adjustments
+      const adj = {};
+      for (const row of res.data.chart) adj[row.track_id] = String(row.score_adjustment || 0);
+      setEditAdj(adj);
     } catch (e) {
       setError(e?.response?.data?.error || e.message);
     } finally {
@@ -30,11 +36,40 @@ export default function ChartView({ list }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const saveAdjustment = async (trackId) => {
+    const val = Number(editAdj[trackId]);
+    if (isNaN(val)) return;
+    setSavingAdj(s => ({ ...s, [trackId]: true }));
+    try {
+      await axios.patch(`${API}/admin/tracks/${trackId}/score-adjustment`, { adjustment: val });
+      load();
+    } catch (e) {
+      alert(e.response?.data?.error || 'Opslaan mislukt');
+    } finally {
+      setSavingAdj(s => ({ ...s, [trackId]: false }));
+    }
+  };
+
+  const publish = async () => {
+    if (!window.confirm(`Hitlijst "${list.name}" publiceren voor week ${new Date().toLocaleDateString('nl-NL')}?\n\nDe huidige stand wordt opgeslagen in de chart history.`)) return;
+    setPublishing(true);
+    setPublishResult(null);
+    try {
+      const res = await axios.post(`${API}/admin/chart/${list.id}/publish`);
+      setPublishResult(res.data);
+    } catch (e) {
+      alert(e.response?.data?.error || 'Publiceren mislukt');
+    } finally {
+      setPublishing(false);
+    }
+  };
+
   if (loading) return <p>Laden…</p>;
   if (error)   return <p style={{ color: '#c00' }}>Fout: {error}</p>;
   if (!data)   return null;
 
   const visible = showZero ? data.chart : data.chart.filter(r => r.vote_count > 0);
+  const scoreRules = data.list?.score_rules;
 
   return (
     <div>
@@ -52,6 +87,11 @@ export default function ChartView({ list }) {
             {data.totals.total_voters} stemmer{data.totals.total_voters === 1 ? '' : 's'} · {data.totals.total_votes} stem{data.totals.total_votes === 1 ? '' : 'men'}
             {' · '}max {data.list.max_votes} keuzes
           </p>
+          {scoreRules && Array.isArray(scoreRules) && scoreRules.length > 0 && (
+            <p className="helper-text" style={{ margin:'4px 0 0', fontSize:12 }}>
+              Punten: {scoreRules.map((p, i) => `#${i+1}=${p}`).join(' · ')}
+            </p>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}>
@@ -63,8 +103,24 @@ export default function ChartView({ list }) {
             Toon tracks zonder stemmen
           </label>
           <button className="btn btn-sm btn-outline" onClick={load}>🔄 Vernieuwen</button>
+          {hasPerm('chart') && (
+            <button
+              className="btn btn-sm"
+              style={{ background: publishing ? '#888' : '#080', color: '#fff' }}
+              onClick={publish}
+              disabled={publishing}
+            >
+              {publishing ? 'Publiceren…' : '📢 Publiceren'}
+            </button>
+          )}
         </div>
       </div>
+      {publishResult && (
+        <div style={{ background:'#e8f5e9', border:'1px solid #a5d6a7', borderRadius:8, padding:'10px 16px', marginBottom:16, fontSize:14 }}>
+          ✅ Gepubliceerd! Week {publishResult.week} / {publishResult.year} — {publishResult.trackCount} track{publishResult.trackCount === 1 ? '' : 's'} opgeslagen.
+          <button onClick={() => setPublishResult(null)} style={{ float:'right', background:'none', border:'none', cursor:'pointer', fontSize:16, lineHeight:1 }}>✕</button>
+        </div>
+      )}
 
       {visible.length === 0 ? (
         <p className="helper-text">Nog geen stemmen.</p>
@@ -78,6 +134,9 @@ export default function ChartView({ list }) {
                 <th style={{ padding: '10px 12px' }}>Titel</th>
                 <th style={{ padding: '10px 12px', width: 80,  textAlign: 'right' }}>Score</th>
                 <th style={{ padding: '10px 12px', width: 90,  textAlign: 'right' }}>Stemmen</th>
+                {hasPerm('scoring') && (
+                <th style={{ padding: '10px 12px', width: 140, textAlign: 'right' }}>Bonus/Malus</th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -91,6 +150,27 @@ export default function ChartView({ list }) {
                   </td>
                   <td style={{ padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row.score}</td>
                   <td style={{ padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{row.vote_count}</td>
+                  {hasPerm('scoring') && (
+                  <td style={{ padding: '6px 12px', textAlign: 'right' }}>
+                    <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', alignItems: 'center' }}>
+                      <input
+                        type="number"
+                        value={editAdj[row.track_id] ?? '0'}
+                        onChange={e => setEditAdj(a => ({ ...a, [row.track_id]: e.target.value }))}
+                        style={{ width: 56, textAlign: 'center', padding: '3px 6px', fontSize: 13 }}
+                        onKeyDown={e => e.key === 'Enter' && saveAdjustment(row.track_id)}
+                      />
+                      <button
+                        className="btn btn-sm btn-outline"
+                        style={{ padding: '3px 8px', fontSize: 12 }}
+                        disabled={savingAdj[row.track_id]}
+                        onClick={() => saveAdjustment(row.track_id)}
+                      >
+                        {savingAdj[row.track_id] ? '…' : '✓'}
+                      </button>
+                    </div>
+                  </td>
+                  )}
                 </tr>
               ))}
             </tbody>

@@ -135,6 +135,8 @@ function renderValue(v) {
     return v.join(', ');
   }
   if (typeof v === 'object' && v.title) return `${v.artist} – ${v.title}`;
+  if (typeof v === 'object' && v.name && v.id)  return `📻 ${v.name}`;
+  if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
 }
 

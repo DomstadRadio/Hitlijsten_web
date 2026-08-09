@@ -6,13 +6,18 @@ import ListEditor from '../components/ListEditor';
 import TrackManager from '../components/TrackManager';
 import SubmissionsManager from '../components/SubmissionsManager';
 import VotersView from '../components/VotersView';
+import NoVotersView from '../components/NoVotersView';
+import BlockedVotersView from '../components/BlockedVotersView';
 import ChartView from '../components/ChartView';
 import UserManager from '../components/UserManager';
 import SettingsPanel from '../components/SettingsPanel';
+import AuditLogView from '../components/AuditLogView';
+import ProgramsManager from '../components/ProgramsManager';
 import FormsManager from '../components/FormsManager';
 import FormBuilder from '../components/FormBuilder';
 import FormResponses from '../components/FormResponses';
 import LoginForm from '../components/LoginForm';
+import BroadcastPanel from '../components/BroadcastPanel';
 import { useAuth } from '../context/AuthContext';
 
 const API = '/api';
@@ -39,6 +44,9 @@ export default function AdminPage() {
   const openTracks      = (list) => { setSelected(list); setView('tracks'); };
   const openSubmissions = (list) => { setSelected(list); setView('submissions'); };
   const openVoters      = (list) => { setSelected(list); setView('voters'); };
+  const openBroadcast   = (list) => { setSelected(list); setView('broadcast'); };
+  const openNoVoters    = (list) => { setSelected(list); setView('no-voters'); };
+  const openBlocked     = (list) => { setSelected(list); setView('blocked'); };
   const openChart       = (list) => { setSelected(list); setView('chart'); };
   const backToLists     = () => { setSelected(null); setView('lists'); loadLists(); };
 
@@ -65,9 +73,19 @@ export default function AdminPage() {
               📋 Formulieren
             </button>
           )}
+          {hasPerm('forms') && view !== 'programs' && (
+            <button className="btn btn-outline btn-sm" onClick={() => { setSelected(null); setView('programs'); }}>
+              📻 Programma's
+            </button>
+          )}
           {hasPerm('users') && view !== 'users' && (
             <button className="btn btn-outline btn-sm" onClick={() => { setSelected(null); setView('users'); }}>
               👤 Gebruikers
+            </button>
+          )}
+          {hasPerm('audit') && view !== 'audit' && (
+            <button className="btn btn-outline btn-sm" onClick={() => { setSelected(null); setView('audit'); }}>
+              🗂 Log
             </button>
           )}
           {hasPerm('settings') && view !== 'settings' && (
@@ -130,6 +148,15 @@ export default function AdminPage() {
                       {hasPerm('voters') && (
                         <button className="btn btn-sm btn-outline" onClick={() => openVoters(l)}>📞 Stemmers</button>
                       )}
+                      {hasPerm('submissions') && (
+                        <button className="btn btn-sm btn-outline" onClick={() => openBroadcast(l)}>📢 Broadcast</button>
+                      )}
+                      {hasPerm('submissions') && (
+                        <button className="btn btn-sm btn-outline" onClick={() => openNoVoters(l)}>⚠️ Niet gestemd</button>
+                      )}
+                      {hasPerm('blocks') && (
+                        <button className="btn btn-sm btn-outline" onClick={() => openBlocked(l)}>⛔ Blokkeringen</button>
+                      )}
                       {hasPerm('chart') && (
                         <button className="btn btn-sm btn-outline" onClick={() => openChart(l)}>📊 Hitlijst</button>
                       )}
@@ -159,11 +186,23 @@ export default function AdminPage() {
       )}
 
       {view === 'submissions' && selected && hasPerm('submissions') && (
-        <SubmissionsManager list={selected} />
+        <SubmissionsManager list={selected} onNoVoters={() => openNoVoters(selected)} />
       )}
 
       {view === 'voters' && selected && hasPerm('voters') && (
         <VotersView list={selected} />
+      )}
+
+      {view === 'broadcast' && selected && hasPerm('submissions') && (
+        <BroadcastPanel list={selected} />
+      )}
+
+      {view === 'no-voters' && selected && hasPerm('submissions') && (
+        <NoVotersView list={selected} />
+      )}
+
+      {view === 'blocked' && selected && hasPerm('blocks') && (
+        <BlockedVotersView list={selected} />
       )}
 
       {view === 'chart' && selected && hasPerm('chart') && (
@@ -172,6 +211,14 @@ export default function AdminPage() {
 
       {view === 'users' && hasPerm('users') && (
         <UserManager />
+      )}
+
+      {view === 'audit' && hasPerm('audit') && (
+        <AuditLogView />
+      )}
+
+      {view === 'programs' && hasPerm('forms') && (
+        <ProgramsManager />
       )}
 
       {view === 'settings' && hasPerm('settings') && (

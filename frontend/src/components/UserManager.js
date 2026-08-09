@@ -5,14 +5,18 @@ import { useAuth } from '../context/AuthContext';
 const API = '/api/auth';
 
 const ALL_PERMS = [
-  { key: 'lists',       label: '📋 Lijsten beheren',       desc: 'Aanmaken, bewerken, verwijderen' },
-  { key: 'tracks',      label: '🎵 Tracks beheren',         desc: 'Tracks toevoegen, verwijderen, sync' },
-  { key: 'submissions', label: '📬 Inzendingen beoordelen', desc: 'Goedkeuren, afwijzen, per track' },
-  { key: 'voters',      label: '📞 Stemmers bekijken',      desc: 'Overzicht voor radio-calls' },
-  { key: 'chart',       label: '🏆 Hitlijst publiceren',    desc: 'Chart berekenen en publiceren' },
-  { key: 'forms',       label: '📝 Formulieren',            desc: 'Custom formulieren bouwen en inzendingen bekijken' },
-  { key: 'settings',    label: '⚙️ Instellingen',           desc: 'SMTP, sync, e-mail test' },
-  { key: 'users',       label: '👤 Gebruikers beheren',     desc: 'Accounts en rechten' },
+  { key: 'lists',       label: '📋 Lijsten beheren',            desc: 'Aanmaken, bewerken, verwijderen' },
+  { key: 'tracks',      label: '🎵 Tracks beheren',             desc: 'Tracks toevoegen, verwijderen, sync' },
+  { key: 'submissions', label: '📬 Inzendingen beoordelen',     desc: 'Goedkeuren, afwijzen, per track' },
+  { key: 'voters',      label: '📞 Stemmers bekijken',          desc: 'Overzicht voor radio-calls' },
+  { key: 'blocks',      label: '⛔ Stemmers verwijderen/blokkeren', desc: 'Stemmer verwijderen, blokkeren en deblokkeren' },
+  { key: 'reset',       label: '♻ Seizoensreset uitvoeren',     desc: 'Alle stemmen en stemmers wissen (chart blijft)' },
+  { key: 'scoring',     label: '🔢 Puntentelling instellen',    desc: 'Scoreregels en bonus/malus per track aanpassen' },
+  { key: 'chart',       label: '🏆 Hitlijst publiceren',        desc: 'Chart berekenen en publiceren' },
+  { key: 'forms',       label: '📝 Formulieren',                desc: 'Custom formulieren bouwen en inzendingen bekijken' },
+  { key: 'settings',    label: '⚙️ Instellingen',              desc: 'SMTP, sync, e-mail test' },
+  { key: 'users',       label: '👤 Gebruikers beheren',         desc: 'Accounts en rechten' },
+  { key: 'audit',       label: '🗂 Activiteitenlog inzien',     desc: 'Wie wanneer wat heeft gedaan + binnengekomen stemmen' },
 ];
 
 export default function UserManager() {

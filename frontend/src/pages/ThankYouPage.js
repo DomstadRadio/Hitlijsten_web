@@ -14,6 +14,9 @@ export default function ThankYouPage() {
         <p style={{ marginTop:12 }}>
           Je stem is succesvol ontvangen. We sturen je ook een bevestiging per e-mail.
         </p>
+        <p style={{ marginTop:10, fontSize:13, color:'#888', background:'#fffbe6', borderRadius:6, padding:'8px 12px', textAlign:'left' }}>
+          📧 Geen bevestiging ontvangen? Controleer ook je <strong>spam-</strong> of <strong>ongewenste e-mail</strong> map.
+        </p>
         <button className="btn" style={{ marginTop:24 }}
           onClick={() => navigate(`/stem/${slug}/resultaten`)}>
           Bekijk de tussenstand
