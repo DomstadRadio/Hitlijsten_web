@@ -14,8 +14,11 @@ const { logAction } = require('../utils/audit');
 
 const router = express.Router();
 
-const WHITELIST = (process.env.MACHINE_ID_WHITELIST || '').split(',').map(s => s.trim()).filter(Boolean);
+const WHITELIST    = (process.env.MACHINE_ID_WHITELIST || '').split(',').map(s => s.trim()).filter(Boolean);
+const TEST_EMAILS  = (process.env.TEST_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 const isWhitelisted = (id) => id && WHITELIST.includes(id);
+// Test-emailadressen mogen altijd stemmen, ongeacht machine/cookie/duplicaat-checks
+const isTestEmail = (addr) => addr && TEST_EMAILS.includes(addr.toLowerCase());
 
 // POST /api/vote/:slug/register
 router.post('/:slug/register', async (req, res) => {
@@ -29,37 +32,41 @@ router.post('/:slug/register', async (req, res) => {
   if (!name || !name.trim()) return res.status(400).json({ error: 'Naam is verplicht' });
   if (!emailAddr) return res.status(400).json({ error: 'E-mailadres is verplicht' });
 
-  // Controleer blokkeerlijst (op email én machine_id)
-  const isBlocked = db.prepare(`
-    SELECT id FROM blocked_voters
-    WHERE list_id = ?
-      AND (
-        (email IS NOT NULL AND lower(email) = lower(?))
-        OR (machine_id IS NOT NULL AND machine_id = ? AND ? IS NOT NULL)
-      )
-    LIMIT 1
-  `).get(list.id, emailAddr, machineId || '', machineId || null);
-  if (isBlocked) return res.status(403).json({ error: 'Je kunt niet deelnemen aan deze stemming' });
+  const tester = isTestEmail(emailAddr);
 
-  // Controleer of machineId al gestemd heeft (alleen als er daadwerkelijk votes zijn)
-  if (machineId && !isWhitelisted(machineId)) {
-    const existing = db.prepare(`
-      SELECT r.id FROM registrations r
-      WHERE r.list_id = ? AND r.machine_id = ? AND r.verified = 1
-        AND EXISTS (SELECT 1 FROM votes v WHERE v.registration_id = r.id)
-    `).get(list.id, machineId);
-    if (existing) return res.status(409).json({ error: 'Je hebt al gestemd vanaf dit apparaat' });
+  // Blokkeerlijst overslaan voor testemail
+  if (!tester) {
+    const isBlocked = db.prepare(`
+      SELECT id FROM blocked_voters
+      WHERE list_id = ?
+        AND (
+          (email IS NOT NULL AND lower(email) = lower(?))
+          OR (machine_id IS NOT NULL AND machine_id = ? AND ? IS NOT NULL)
+        )
+      LIMIT 1
+    `).get(list.id, emailAddr, machineId || '', machineId || null);
+    if (isBlocked) return res.status(403).json({ error: 'Je kunt niet deelnemen aan deze stemming' });
   }
 
-  // Controleer of email al geregistreerd is
-  const existingEmail = db.prepare(
-    'SELECT id, verified FROM registrations WHERE list_id = ? AND email = ?'
-  ).get(list.id, emailAddr.toLowerCase());
+  // Machine- en email-duplicaatchecks overslaan voor testemail
+  if (!tester) {
+    if (machineId && !isWhitelisted(machineId)) {
+      const existing = db.prepare(`
+        SELECT r.id FROM registrations r
+        WHERE r.list_id = ? AND r.machine_id = ? AND r.verified = 1
+          AND EXISTS (SELECT 1 FROM votes v WHERE v.registration_id = r.id)
+      `).get(list.id, machineId);
+      if (existing) return res.status(409).json({ error: 'Je hebt al gestemd vanaf dit apparaat' });
+    }
 
-  if (existingEmail?.verified && !isWhitelisted(machineId)) {
-    // Alleen blokkeren als er ook daadwerkelijk gestemd is
-    const hasVoted = db.prepare('SELECT id FROM votes WHERE registration_id = ?').get(existingEmail.id);
-    if (hasVoted) return res.status(409).json({ error: 'Dit e-mailadres heeft al gestemd' });
+    const existingEmail = db.prepare(
+      'SELECT id, verified FROM registrations WHERE list_id = ? AND email = ?'
+    ).get(list.id, emailAddr.toLowerCase());
+
+    if (existingEmail?.verified && !isWhitelisted(machineId)) {
+      const hasVoted = db.prepare('SELECT id FROM votes WHERE registration_id = ?').get(existingEmail.id);
+      if (hasVoted) return res.status(409).json({ error: 'Dit e-mailadres heeft al gestemd' });
+    }
   }
 
   const token = uuidv4();
@@ -191,16 +198,8 @@ router.post('/:slug/submit', async (req, res) => {
   const existingVote = db.prepare(
     'SELECT id FROM votes WHERE registration_id = ?'
   ).get(reg.id);
-  if (existingVote && !isWhitelisted(reg.machine_id)) return res.status(409).json({ error: 'Je hebt al gestemd' });
+  if (existingVote && !isWhitelisted(reg.machine_id) && !isTestEmail(reg.email)) return res.status(409).json({ error: 'Je hebt al gestemd' });
 
-  // Verwijder bestaande stemmen bij whitelist (hertest)
-  if (existingVote && isWhitelisted(reg.machine_id)) {
-    db.prepare('DELETE FROM votes WHERE registration_id = ?').run(reg.id);
-  }
-
-  // Upsert tracks: zoek eerst op artist+title (case-insensitive) in deze lijst;
-  // bestaat de track al, hergebruik dan diens id zodat de stem optelt.
-  // Anders insert nieuw. Dit voorkomt duplicaten over verschillende bronnen heen.
   const findByArtistTitle = db.prepare(`
     SELECT id, title, artist FROM list_tracks
      WHERE list_id = ?
@@ -215,8 +214,16 @@ router.post('/:slug/submit', async (req, res) => {
     INSERT INTO list_tracks (list_id, source, external_id, title, artist, album, cover_url, year)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const insertVote = db.prepare(
+    'INSERT INTO votes (registration_id, list_id, track_id, position) VALUES (?, ?, ?, ?)'
+  );
+  const deleteVotes = db.prepare('DELETE FROM votes WHERE registration_id = ?');
 
-  const resolvedTracks = db.transaction(() => {
+  // Alles in één atomaire transactie: delete oude stemmen (whitelist), upsert tracks, insert nieuwe stemmen
+  let resolvedTracks;
+  try {
+    resolvedTracks = db.transaction(() => {
+    if (existingVote) deleteVotes.run(reg.id);
     const result = [];
     for (const v of votes) {
       // 1) Match op artist+title (definitieve dedupe)
@@ -241,19 +248,15 @@ router.post('/:slug/submit', async (req, res) => {
       }
       result.push({ ...row, position: Number(v.position) });
     }
-    return result;
-  })();
-
-  // Sla stemmen op in transactie
-  const insertVote = db.prepare(
-    'INSERT INTO votes (registration_id, list_id, track_id, position) VALUES (?, ?, ?, ?)'
-  );
-
-  db.transaction(() => {
-    for (const t of resolvedTracks) {
+    for (const t of result) {
       insertVote.run(reg.id, list.id, t.id, t.position);
     }
-  })();
+    return result;
+    })();
+  } catch (err) {
+    console.error('Stem opslaan mislukt:', err.message);
+    return res.status(500).json({ error: 'Je stem kon niet worden opgeslagen. Probeer het opnieuw.' });
+  }
 
   // Sla opmerking op indien meegegeven
   if (comment) {
