@@ -48,6 +48,11 @@ router.post('/:slug/register', async (req, res) => {
     if (isBlocked) return res.status(403).json({ error: 'Je kunt niet deelnemen aan deze stemming' });
   }
 
+  // Bestaande registratie altijd opzoeken (nodig voor UPDATE vs INSERT verderop)
+  const existingEmail = db.prepare(
+    'SELECT id, verified FROM registrations WHERE list_id = ? AND email = ?'
+  ).get(list.id, emailAddr.toLowerCase());
+
   // Machine- en email-duplicaatchecks overslaan voor testemail
   if (!tester) {
     if (machineId && !isWhitelisted(machineId)) {
@@ -58,10 +63,6 @@ router.post('/:slug/register', async (req, res) => {
       `).get(list.id, machineId);
       if (existing) return res.status(409).json({ error: 'Je hebt al gestemd vanaf dit apparaat' });
     }
-
-    const existingEmail = db.prepare(
-      'SELECT id, verified FROM registrations WHERE list_id = ? AND email = ?'
-    ).get(list.id, emailAddr.toLowerCase());
 
     if (existingEmail?.verified && !isWhitelisted(machineId)) {
       const hasVoted = db.prepare('SELECT id FROM votes WHERE registration_id = ?').get(existingEmail.id);
