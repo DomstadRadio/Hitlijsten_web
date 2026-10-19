@@ -58,8 +58,10 @@ async function sendMail({ to, subject, html }) {
   );
 }
 
-async function sendVerificationEmail({ to, name, listName, code, verifyToken, listSlug }) {
-  const verifyUrl = `https://domstadradio.nl/stem/${listSlug}/verificatie/${verifyToken}`;
+async function sendVerificationEmail({ to, name, listName, code, verifyToken, listSlug, verifyDomain }) {
+  // Domain waar verificatie-link naar wijst: gebruik list's domain of fallback
+  const domain = verifyDomain || process.env.VERIFY_DOMAIN || 'hitlijsten.domstadradio.nl';
+  const verifyUrl = `https://${domain}/stem/${listSlug}/verificatie/${verifyToken}`;
   await sendMail({
     to,
     subject: `Je verificatiecode voor ${listName}`,

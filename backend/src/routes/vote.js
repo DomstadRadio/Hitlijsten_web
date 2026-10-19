@@ -89,6 +89,9 @@ router.post('/:slug/register', async (req, res) => {
   }
 
   try {
+    // Bepaal de domein voor de verificatie-link: gebruik list's domain of fallback
+    const verifyDomain = list.domain || process.env.VERIFY_DOMAIN || 'hitlijsten.domstadradio.nl';
+    
     await email.sendVerificationEmail({
       to: emailAddr,
       name,
@@ -96,6 +99,7 @@ router.post('/:slug/register', async (req, res) => {
       code,
       verifyToken: token,
       listSlug: list.slug,
+      verifyDomain,
     });
   } catch (mailErr) {
     console.error('E-mail versturen mislukt:', mailErr.message);
