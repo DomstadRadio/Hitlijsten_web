@@ -33,7 +33,7 @@ function searchListTracks(slug, q) {
     const rows = db.prepare(`
       SELECT id, external_id, source, title, artist, album, cover_url, year
       FROM list_tracks
-      WHERE list_id = ?
+      WHERE list_id = ? AND moderation_status = 'approved'
         AND (LOWER(title) LIKE ? OR LOWER(artist) LIKE ?)
       ORDER BY added_at ASC
       LIMIT 20
@@ -65,7 +65,7 @@ router.get('/', async (req, res) => {
     : (group ? [group] : []);
   const slug  = (req.query.slug  || '').trim() || null;
   // Optionele expliciete bronnen-filter: ?sources=playit,spotify
-  // Standaard (geen param) = oude gedrag: PlayIt + alleen Spotify als aanvulling.
+  // Standaard (geen param): PlayIt + Spotify als aanvulling wanneer PlayIt weinig/geen hits oplevert.
   const sourcesParam = (req.query.sources || '').trim();
   const sources = sourcesParam
     ? sourcesParam.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
@@ -112,7 +112,7 @@ router.get('/', async (req, res) => {
 
     // 3. Spotify
     const spotifyForced  = sources && wantSpotify;
-    const spotifyFallback = !sources && wantSpotify && merged.length < 5 && !groups.length;
+    const spotifyFallback = !sources && wantSpotify && merged.length < 5;
     if (spotifyForced || spotifyFallback) {
       try {
         const spotifyResults = await spotify.searchTracks(q);

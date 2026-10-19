@@ -100,6 +100,7 @@ async function getGroupTracks(groupName) {
 async function searchTracks(query, groupName) {
   const q    = (query ?? '').trim();
   const qLow = q.toLowerCase();
+  const group = (groupName ?? '').trim();
   const db   = getDb();
 
   // Saniteer LIKE-wildcards om injection via zoekterm te voorkomen
@@ -109,16 +110,27 @@ async function searchTracks(query, groupName) {
 
   if (hasLocalData) {
     let rows;
-    if (groupName) {
+    if (group) {
       rows = db.prepare(`
         SELECT pt.guid, pt.title, pt.artist
         FROM playit_tracks pt
         JOIN playit_track_groups ptg ON ptg.track_guid = pt.guid
         JOIN playit_groups pg        ON pg.guid = ptg.group_guid
-        WHERE pg.name = ?
+        WHERE LOWER(TRIM(pg.name)) = LOWER(TRIM(?))
           AND (pt.title LIKE ? ESCAPE '\\' OR pt.artist LIKE ? ESCAPE '\\')
         LIMIT 100
-      `).all(groupName, safeLike(q), safeLike(q));
+      `).all(group, safeLike(q), safeLike(q));
+
+      // Als de groepsnaam niet (meer) exact overeenkomt of de groep leeg is,
+      // geef dan toch PlayIt-resultaten terug uit alle tracks.
+      if (!rows.length && q) {
+        rows = db.prepare(`
+          SELECT guid, title, artist
+          FROM playit_tracks
+          WHERE title LIKE ? ESCAPE '\\' OR artist LIKE ? ESCAPE '\\'
+          LIMIT 50
+        `).all(safeLike(q), safeLike(q));
+      }
     } else if (q) {
       rows = db.prepare(`
         SELECT guid, title, artist

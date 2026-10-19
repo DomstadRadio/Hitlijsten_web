@@ -9,6 +9,12 @@ const ACTION_LABELS = {
   'submission.approve': { icon: '✅', label: 'Inzending goedgekeurd',   color: '#2e7d32' },
   'submission.reject':  { icon: '❌', label: 'Inzending afgewezen',     color: '#c62828' },
   'submission.reset':   { icon: '↺',  label: 'Inzending teruggezet',   color: '#888' },
+  'track.approve':      { icon: '✅', label: 'Track goedgekeurd',       color: '#2e7d32' },
+  'track.reject':       { icon: '❌', label: 'Track afgewezen',         color: '#c62828' },
+  'track.reset':        { icon: '↺',  label: 'Track teruggezet',        color: '#888' },
+  'track.delete':       { icon: '🗑', label: 'Track verwijderd',        color: '#c62828' },
+  'track.score_adjust': { icon: '🔢', label: 'Score aangepast',         color: '#6a1b9a' },
+  'user.delete':        { icon: '🗑', label: 'Gebruiker verwijderd',    color: '#c62828' },
   'voter.delete':       { icon: '🗑', label: 'Stemmer verwijderd',      color: '#c62828' },
   'voter.block':        { icon: '⛔', label: 'Stemmer geblokkeerd',     color: '#e65100' },
   'voter.unblock':      { icon: '🔓', label: 'Stemmer gedeblokkeerd',   color: '#2e7d32' },
@@ -30,9 +36,15 @@ function DetailCell({ detail, action }) {
   if (detail.name)   parts.push(detail.name);
   if (detail.week)   parts.push(`week ${detail.week}/${detail.year}`);
   if (detail.trackCount != null) parts.push(`${detail.trackCount} tracks`);
-  if (detail.votesDeleted != null) parts.push(`${detail.votesDeleted} stemmen, ${detail.registrationsDeleted} stemmers gewist`);
+  if (detail.votesDeleted != null && action === 'season.reset') parts.push(`${detail.votesDeleted} stemmen, ${detail.registrationsDeleted} stemmers gewist`);
   if (detail.reason)  parts.push(`reden: ${detail.reason}`);
-  if (detail.trackCount != null && !detail.week) parts.push(`${detail.trackCount} tracks`);
+  if (detail.voter)   parts.push(`stemmer: ${detail.voter}`);
+  if (detail.position != null) parts.push(`positie ${detail.position}`);
+  if (Array.isArray(detail.tracks)) parts.push(detail.tracks.join(', '));
+  if (detail.previous != null && detail.adjustment != null) parts.push(`${detail.previous} → ${detail.adjustment}`);
+  if (detail.votesDeleted != null && action === 'track.delete') parts.push(`${detail.votesDeleted} gekoppelde stemmen verwijderd`);
+  if (detail.role) parts.push(`rol: ${detail.role}`);
+  if (detail.permissions) parts.push(`rechten: ${detail.permissions}`);
   if (detail.ip)      parts.push(`IP: ${detail.ip}`);
   return <span style={{ fontSize: 12, color: '#666' }}>{parts.join(' · ')}</span>;
 }

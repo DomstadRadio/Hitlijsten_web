@@ -59,12 +59,17 @@ function publishChart(listId) {
     );
 
     const scoreMap = aggregateScores(voteRows, list.max_votes, list.score_rules);
+    const artistMap = new Map(
+      db.prepare('SELECT id, artist FROM list_tracks WHERE list_id = ?').all(listId)
+        .map(t => [t.id, t.artist || ''])
+    );
 
     const results = [...scoreMap.entries()].map(([track_id, s]) => ({
       track_id,
+      artist: artistMap.get(track_id) || '',
       score:      s.score + (adjustMap.get(track_id) || 0),
       vote_count: s.vote_count,
-    })).sort((a, b) => b.score - a.score || b.vote_count - a.vote_count).slice(0, 100);
+    })).sort((a, b) => b.score - a.score || b.vote_count - a.vote_count || a.artist.localeCompare(b.artist)).slice(0, 100);
 
     const upsert = db.prepare(`
       INSERT INTO chart_history (list_id, track_id, week, year, position, score, vote_count)

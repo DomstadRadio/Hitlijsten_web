@@ -11,9 +11,21 @@ const adminRouter  = require('./routes/admin');
 const chartRouter  = require('./routes/chart');
 const formsRouter  = require('./routes/forms');
 const { router: authRouter } = require('./routes/auth');
+const { getDb } = require('./db/database');
 
 // DB initialiseren bij startup
-require('./db/database').getDb();
+getDb();
+
+// Laad persistente instellingen (zoals mailprovider/API-keys) uit de DB
+// zodat die na een restart niet terugvallen op placeholder-waarden uit .env.
+try {
+  const persisted = getDb().prepare('SELECT key, value FROM settings').all();
+  for (const row of persisted) {
+    if (row?.key) process.env[row.key] = row.value;
+  }
+} catch (err) {
+  console.warn('[settings] Kon settings niet laden uit DB:', err.message);
+}
 
 // Automatische publicatie-scheduler starten
 require('./services/scheduler');
@@ -47,8 +59,6 @@ app.get('/api/health', (req, res) => res.json({ ok: true, ts: new Date().toISOSt
 // ─── Domeingebaseerde redirect ─────────────────────────────────────────────
 // Als iemand via een eigen domein langskomt (bijv. utrechtsetop100.nl),
 // zoek dan de bijbehorende lijst op en stuur door naar /stem/:slug
-const { getDb } = require('./db/database');
-
 app.use((req, res, next) => {
   // Alleen rootpaden doorsturen; API + uploads + assets overslaan
   if (req.path.startsWith('/api') || req.path.startsWith('/uploads') || req.path.startsWith('/stem') || req.path.startsWith('/admin') || req.path.startsWith('/formulier') || req.path.startsWith('/static')) {

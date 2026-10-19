@@ -26,7 +26,7 @@ const { getDb }   = require('../db/database');
 const { requireAuth, requirePerm } = require('./auth');
 const playitSync  = require('../services/playit-sync');
 const { sendMail, sendVoteApprovedEmail, sendNoVoteReminderEmail } = require('../services/email');
-const { getArtwork } = require('../services/artwork');
+const { getArtwork, isPlaceholderCoverUrl } = require('../services/artwork');
 const { reloadSchedules } = require('../services/scheduler');
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -37,16 +37,49 @@ const router = express.Router();
 // Helper: voeg een externe track (PlayIt/Spotify) in list_tracks in als die er nog niet is
 function upsertListTrack(db, listId, track) {
   const { external_id, source, title, artist, album, cover_url, year } = track;
-  let lt = db.prepare('SELECT id FROM list_tracks WHERE list_id = ? AND external_id = ? AND source = ?')
-    .get(listId, external_id, source || 'playit');
+  let lt = db.prepare(`
+    SELECT id, submitted_only, moderation_status FROM list_tracks
+    WHERE list_id = ? AND LOWER(artist) = LOWER(?) AND LOWER(title) = LOWER(?)
+    LIMIT 1
+  `).get(listId, artist, title);
+  if (!lt && external_id) {
+    lt = db.prepare('SELECT id, submitted_only, moderation_status FROM list_tracks WHERE list_id = ? AND external_id = ? AND source = ?')
+      .get(listId, external_id, source || 'playit');
+  }
   if (!lt) {
     const info = db.prepare(`
-      INSERT INTO list_tracks (list_id, external_id, source, title, artist, album, cover_url, year)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO list_tracks (
+        list_id, external_id, source, title, artist, album, cover_url, year,
+        moderation_status, submitted_only
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1)
     `).run(listId, external_id, source || 'playit', title, artist, album || null, cover_url || null, year || null);
     lt = { id: info.lastInsertRowid };
+  } else if (lt.submitted_only && lt.moderation_status === 'rejected') {
+    db.prepare("UPDATE list_tracks SET moderation_status = 'pending' WHERE id = ?").run(lt.id);
   }
   return lt.id;
+}
+
+function refreshSubmittedTrackStatus(db, trackId) {
+  const track = db.prepare('SELECT submitted_only FROM list_tracks WHERE id = ?').get(trackId);
+  if (!track?.submitted_only) return;
+
+  const states = db.prepare(`
+    SELECT
+      COUNT(CASE WHEN approved = 1 THEN 1 END) AS approved_count,
+      COUNT(CASE WHEN approved IS NULL THEN 1 END) AS pending_count
+    FROM votes WHERE track_id = ?
+  `).get(trackId);
+  const status = states.approved_count > 0
+    ? 'approved'
+    : states.pending_count > 0 ? 'pending' : 'rejected';
+  db.prepare('UPDATE list_tracks SET moderation_status = ? WHERE id = ?').run(status, trackId);
+}
+
+function refreshRegistrationTracks(db, registrationId) {
+  const tracks = db.prepare('SELECT DISTINCT track_id FROM votes WHERE registration_id = ?').all(registrationId);
+  tracks.forEach(({ track_id }) => refreshSubmittedTrackStatus(db, track_id));
 }
 
 // Alle admin routes vereisen minimaal authenticatie
@@ -106,9 +139,22 @@ router.post('/submissions/:regId/tracks/:voteId/approve', ...requirePerm('submis
   const db = getDb();
   const reg = db.prepare('SELECT r.*, l.name AS list_name FROM registrations r JOIN lists l ON l.id = r.list_id WHERE r.id = ?').get(req.params.regId);
   if (!reg) return res.status(404).json({ error: 'Niet gevonden' });
+  const vote = db.prepare(`
+    SELECT v.track_id, v.position, lt.title, lt.artist
+    FROM votes v JOIN list_tracks lt ON lt.id = v.track_id
+    WHERE v.id = ? AND v.registration_id = ?
+  `)
+    .get(req.params.voteId, req.params.regId);
+  if (!vote) return res.status(404).json({ error: 'Track niet gevonden' });
   const changes = db.prepare('UPDATE votes SET approved = 1 WHERE id = ? AND registration_id = ?')
     .run(req.params.voteId, req.params.regId).changes;
   if (!changes) return res.status(404).json({ error: 'Track niet gevonden' });
+  refreshSubmittedTrackStatus(db, vote.track_id);
+  logAction({
+    actor: req.user?.username, action: 'track.approve', list_id: reg.list_id,
+    target: `${vote.artist} - ${vote.title}`,
+    detail: { voter: reg.email, name: reg.name, position: vote.position, list: reg.list_name },
+  });
   republishChart(reg.list_id);
 
   // Als alle tracks een oordeel hebben: registratie automatisch promoten + mail
@@ -133,9 +179,22 @@ router.post('/submissions/:regId/tracks/:voteId/reject', ...requirePerm('submiss
   const db = getDb();
   const reg = db.prepare('SELECT r.*, l.name AS list_name FROM registrations r JOIN lists l ON l.id = r.list_id WHERE r.id = ?').get(req.params.regId);
   if (!reg) return res.status(404).json({ error: 'Niet gevonden' });
+  const vote = db.prepare(`
+    SELECT v.track_id, v.position, lt.title, lt.artist
+    FROM votes v JOIN list_tracks lt ON lt.id = v.track_id
+    WHERE v.id = ? AND v.registration_id = ?
+  `)
+    .get(req.params.voteId, req.params.regId);
+  if (!vote) return res.status(404).json({ error: 'Track niet gevonden' });
   const changes = db.prepare('UPDATE votes SET approved = 0 WHERE id = ? AND registration_id = ?')
     .run(req.params.voteId, req.params.regId).changes;
   if (!changes) return res.status(404).json({ error: 'Track niet gevonden' });
+  refreshSubmittedTrackStatus(db, vote.track_id);
+  logAction({
+    actor: req.user?.username, action: 'track.reject', list_id: reg.list_id,
+    target: `${vote.artist} - ${vote.title}`,
+    detail: { voter: reg.email, name: reg.name, position: vote.position, list: reg.list_name },
+  });
   republishChart(reg.list_id);
 
   // Als alle tracks een oordeel hebben: registratie automatisch promoten + mail
@@ -157,12 +216,28 @@ router.post('/submissions/:regId/tracks/:voteId/reject', ...requirePerm('submiss
 // POST /api/admin/submissions/:regId/tracks/:voteId/reset
 router.post('/submissions/:regId/tracks/:voteId/reset', ...requirePerm('submissions'), (req, res) => {
   const db = getDb();
-  const reg = db.prepare('SELECT list_id FROM registrations WHERE id = ?').get(req.params.regId);
+  const reg = db.prepare(`
+    SELECT r.list_id, r.email, r.name, l.name AS list_name
+    FROM registrations r JOIN lists l ON l.id = r.list_id WHERE r.id = ?
+  `).get(req.params.regId);
   if (!reg) return res.status(404).json({ error: 'Niet gevonden' });
+  const vote = db.prepare(`
+    SELECT v.track_id, v.position, lt.title, lt.artist
+    FROM votes v JOIN list_tracks lt ON lt.id = v.track_id
+    WHERE v.id = ? AND v.registration_id = ?
+  `)
+    .get(req.params.voteId, req.params.regId);
+  if (!vote) return res.status(404).json({ error: 'Track niet gevonden' });
   const changes = db.prepare('UPDATE votes SET approved = NULL WHERE id = ? AND registration_id = ?')
     .run(req.params.voteId, req.params.regId).changes;
   if (!changes) return res.status(404).json({ error: 'Track niet gevonden' });
+  refreshSubmittedTrackStatus(db, vote.track_id);
   db.prepare('UPDATE registrations SET approved = NULL WHERE id = ?').run(req.params.regId);
+  logAction({
+    actor: req.user?.username, action: 'track.reset', list_id: reg.list_id,
+    target: `${vote.artist} - ${vote.title}`,
+    detail: { voter: reg.email, name: reg.name, position: vote.position, list: reg.list_name },
+  });
   republishChart(reg.list_id);
   res.json({ ok: true });
 });
@@ -174,7 +249,7 @@ router.put('/submissions/:regId/tracks/:voteId/replace', ...requirePerm('submiss
   if (!list_track_id && !track) return res.status(400).json({ error: 'list_track_id of track vereist' });
 
   const vote = db.prepare(`
-    SELECT v.id, v.registration_id, r.list_id
+    SELECT v.id, v.registration_id, v.track_id, r.list_id
     FROM votes v JOIN registrations r ON r.id = v.registration_id
     WHERE v.id = ? AND v.registration_id = ?
   `).get(req.params.voteId, req.params.regId);
@@ -187,6 +262,8 @@ router.put('/submissions/:regId/tracks/:voteId/replace', ...requirePerm('submiss
 
   db.prepare('UPDATE votes SET track_id = ?, approved = NULL WHERE id = ?').run(trackId, vote.id);
   db.prepare('UPDATE registrations SET approved = NULL WHERE id = ?').run(req.params.regId);
+  refreshSubmittedTrackStatus(db, vote.track_id);
+  refreshSubmittedTrackStatus(db, trackId);
   republishChart(vote.list_id);
   res.json({ ok: true });
 });
@@ -218,6 +295,7 @@ router.post('/submissions/:regId/tracks/add', ...requirePerm('submissions'), (re
   `).run(req.params.regId, reg.list_id, trackId, maxPos + 1);
 
   db.prepare('UPDATE registrations SET approved = NULL WHERE id = ?').run(req.params.regId);
+  refreshSubmittedTrackStatus(db, trackId);
   republishChart(reg.list_id);
   res.json({ ok: true });
 });
@@ -231,7 +309,8 @@ router.get('/list-tracks-search/:listId', ...requirePerm('submissions'), (req, r
   const rows = db.prepare(`
     SELECT id AS list_track_id, external_id, source, title, artist, cover_url, year
     FROM list_tracks
-    WHERE list_id = ? AND (LOWER(title) LIKE ? OR LOWER(artist) LIKE ?)
+    WHERE list_id = ? AND moderation_status = 'approved'
+      AND (LOWER(title) LIKE ? OR LOWER(artist) LIKE ?)
     ORDER BY title ASC LIMIT 30
   `).all(req.params.listId, like, like);
   res.json(rows);
@@ -253,7 +332,7 @@ router.get('/tracks-voters/:listId', ...requirePerm('voters'), (req, res) => {
       ON ch.track_id = lt.id AND ch.list_id = ? AND ch.week = ? AND ch.year = ?
     LEFT JOIN votes v ON v.track_id = lt.id AND v.list_id = ?
     LEFT JOIN registrations r ON r.id = v.registration_id AND r.verified = 1
-    WHERE lt.list_id = ?
+    WHERE lt.list_id = ? AND lt.moderation_status = 'approved'
     ORDER BY COALESCE(ch.position, 9999) ASC, lt.title ASC, v.id ASC
   `).all(req.params.listId, week, year, req.params.listId, req.params.listId);
 
@@ -288,7 +367,10 @@ router.post('/submissions/:regId/approve', ...requirePerm('submissions'), (req, 
   const changes = db.prepare('UPDATE registrations SET approved = 1 WHERE id = ?')
     .run(req.params.regId).changes;
   if (!changes) return res.status(404).json({ error: 'Niet gevonden' });
-  logAction({ actor: req.user?.username, action: 'submission.approve', list_id: reg.list_id, target: reg.email, detail: { list: reg.list_name, name: reg.name } });
+  db.prepare('UPDATE votes SET approved = 1 WHERE registration_id = ? AND approved IS NULL').run(req.params.regId);
+  refreshRegistrationTracks(db, req.params.regId);
+  const tracks = db.prepare(`SELECT lt.artist || ' - ' || lt.title AS track FROM votes v JOIN list_tracks lt ON lt.id = v.track_id WHERE v.registration_id = ? ORDER BY v.position`).all(req.params.regId).map(row => row.track);
+  logAction({ actor: req.user?.username, action: 'submission.approve', list_id: reg.list_id, target: reg.email, detail: { list: reg.list_name, name: reg.name, tracks } });
   republishChart(reg.list_id);
   res.json({ ok: true });
 });
@@ -301,7 +383,10 @@ router.post('/submissions/:regId/reject', ...requirePerm('submissions'), (req, r
   const changes = db.prepare('UPDATE registrations SET approved = 0 WHERE id = ?')
     .run(req.params.regId).changes;
   if (!changes) return res.status(404).json({ error: 'Niet gevonden' });
-  logAction({ actor: req.user?.username, action: 'submission.reject', list_id: reg.list_id, target: reg.email, detail: { list: reg.list_name, name: reg.name } });
+  db.prepare('UPDATE votes SET approved = 0 WHERE registration_id = ?').run(req.params.regId);
+  refreshRegistrationTracks(db, req.params.regId);
+  const tracks = db.prepare(`SELECT lt.artist || ' - ' || lt.title AS track FROM votes v JOIN list_tracks lt ON lt.id = v.track_id WHERE v.registration_id = ? ORDER BY v.position`).all(req.params.regId).map(row => row.track);
+  logAction({ actor: req.user?.username, action: 'submission.reject', list_id: reg.list_id, target: reg.email, detail: { list: reg.list_name, name: reg.name, tracks } });
   republishChart(reg.list_id);
   res.json({ ok: true });
 });
@@ -311,6 +396,8 @@ router.post('/submissions/:regId/reset', ...requirePerm('submissions'), (req, re
   const db = getDb();
   const reg = db.prepare('SELECT r.list_id, r.email, l.name AS list_name FROM registrations r JOIN lists l ON l.id=r.list_id WHERE r.id = ?').get(req.params.regId);
   db.prepare('UPDATE registrations SET approved = NULL WHERE id = ?').run(req.params.regId);
+  db.prepare('UPDATE votes SET approved = NULL WHERE registration_id = ?').run(req.params.regId);
+  refreshRegistrationTracks(db, req.params.regId);
   if (reg) {
     logAction({ actor: req.user?.username, action: 'submission.reset', list_id: reg.list_id, target: reg.email, detail: { list: reg.list_name } });
     republishChart(reg.list_id);
@@ -369,7 +456,7 @@ router.get('/chart-live/:listId', ...requirePerm('chart'), (req, res) => {
   `).all(listId);
 
   const adjustments = db.prepare(
-    'SELECT id, score_adjustment FROM list_tracks WHERE list_id = ?'
+    "SELECT id, score_adjustment FROM list_tracks WHERE list_id = ? AND moderation_status = 'approved'"
   ).all(listId);
   const adjustMap = new Map(adjustments.map(a => [a.id, a.score_adjustment || 0]));
 
@@ -381,7 +468,7 @@ router.get('/chart-live/:listId', ...requirePerm('chart'), (req, res) => {
     SELECT lt.id AS track_id, lt.title, lt.artist, lt.album, lt.cover_url,
            lt.year AS release_year, lt.score_adjustment
     FROM list_tracks lt
-    WHERE lt.list_id = ?
+    WHERE lt.list_id = ? AND lt.moderation_status = 'approved'
     ORDER BY lt.artist, lt.title
   `).all(listId);
 
@@ -418,15 +505,15 @@ router.get('/chart-live/:listId', ...requirePerm('chart'), (req, res) => {
 
 // ── PlayIt sync ──────────────────────────────────────────────────────────────
 
-// POST /api/admin/lists/:listId/artwork-sync — haal albumhoezen op via iTunes/Last.fm (SSE stream)
+// POST /api/admin/lists/:listId/artwork-sync — haal albumhoezen op via iTunes/Last.fm/MusicBrainz (SSE stream)
 router.post('/lists/:listId/artwork-sync', ...requirePerm('tracks'), async (req, res) => {
   const db     = getDb();
   const listId = Number(req.params.listId);
   const { overwrite = false } = req.body;
 
   const tracks = overwrite
-    ? db.prepare('SELECT id, artist, title FROM list_tracks WHERE list_id = ?').all(listId)
-    : db.prepare('SELECT id, artist, title FROM list_tracks WHERE list_id = ? AND (cover_url IS NULL OR cover_url = \'\')').all(listId);
+    ? db.prepare("SELECT id, artist, title FROM list_tracks WHERE list_id = ? AND moderation_status = 'approved'").all(listId)
+    : db.prepare("SELECT id, artist, title FROM list_tracks WHERE list_id = ? AND moderation_status = 'approved' AND (cover_url IS NULL OR cover_url = '' OR cover_is_placeholder = 1)").all(listId);
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -436,23 +523,30 @@ router.post('/lists/:listId/artwork-sync', ...requirePerm('tracks'), async (req,
   const sse = (data) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`); };
 
   sse({ type: 'start', total: tracks.length });
-  let found = 0, skipped = 0;
+  let found = 0, skipped = 0, placeholders = 0;
 
   for (const t of tracks) {
     const url = await getArtwork(t.artist, t.title);
     if (url) {
-      db.prepare('UPDATE list_tracks SET cover_url = ? WHERE id = ?').run(url, t.id);
-      found++;
-      sse({ type: 'found', found, skipped, total: tracks.length, artist: t.artist, title: t.title });
+      const isPlaceholder = isPlaceholderCoverUrl(url);
+      db.prepare('UPDATE list_tracks SET cover_url = ?, cover_is_placeholder = ? WHERE id = ?')
+        .run(url, isPlaceholder ? 1 : 0, t.id);
+      if (isPlaceholder) {
+        placeholders++;
+        sse({ type: 'placeholder', found, skipped, placeholders, total: tracks.length, artist: t.artist, title: t.title });
+      } else {
+        found++;
+        sse({ type: 'found', found, skipped, placeholders, total: tracks.length, artist: t.artist, title: t.title });
+      }
     } else {
       skipped++;
-      sse({ type: 'miss', found, skipped, total: tracks.length, artist: t.artist, title: t.title });
+      sse({ type: 'miss', found, skipped, placeholders, total: tracks.length, artist: t.artist, title: t.title });
     }
     // Korte pauze om rate limits te vermijden
     await sleep(300);
   }
 
-  sse({ type: 'done', found, skipped, total: tracks.length });
+  sse({ type: 'done', found, skipped, placeholders, total: tracks.length });
   res.end();
 });
 
@@ -542,24 +636,33 @@ function republishChart(listId) {
       SELECT v.track_id, v.position
       FROM votes v
       JOIN registrations r ON r.id = v.registration_id
+      JOIN list_tracks lt ON lt.id = v.track_id
       WHERE v.list_id = ? AND r.approved = 1
-        AND (v.approved IS NULL OR v.approved = 1)
+        AND v.approved = 1 AND lt.moderation_status = 'approved'
     `).all(listId);
 
     if (voteRows.length === 0) return;
 
     const adjustments = db.prepare(
-      'SELECT id, score_adjustment FROM list_tracks WHERE list_id = ?'
+      "SELECT id, score_adjustment FROM list_tracks WHERE list_id = ? AND moderation_status = 'approved'"
     ).all(listId);
     const adjustMap = new Map(adjustments.map(a => [a.id, a.score_adjustment || 0]));
 
     const scoreMap = aggregateScores(voteRows, list.max_votes, list.score_rules);
 
+    const trackMeta = db.prepare(`
+      SELECT id, artist
+      FROM list_tracks
+      WHERE list_id = ? AND moderation_status = 'approved'
+    `).all(listId);
+    const artistMap = new Map(trackMeta.map(t => [t.id, t.artist || '']));
+
     const results = [...scoreMap.entries()].map(([track_id, s]) => ({
       track_id,
+      artist: artistMap.get(track_id) || '',
       score:      s.score + (adjustMap.get(track_id) || 0),
       vote_count: s.vote_count,
-    })).sort((a, b) => b.score - a.score || b.vote_count - a.vote_count).slice(0, 100);
+    })).sort((a, b) => b.score - a.score || b.vote_count - a.vote_count || a.artist.localeCompare(b.artist)).slice(0, 100);
 
     const upsert = db.prepare(`
       INSERT INTO chart_history (list_id, track_id, week, year, position, score, vote_count)
@@ -606,8 +709,9 @@ router.post('/chart/:listId/publish', ...requirePerm('chart'), (req, res) => {
     SELECT v.track_id, v.position
     FROM votes v
     JOIN registrations r ON r.id = v.registration_id
+    JOIN list_tracks lt ON lt.id = v.track_id
     WHERE v.list_id = ? AND r.approved = 1
-      AND (v.approved IS NULL OR v.approved = 1)
+      AND v.approved = 1 AND lt.moderation_status = 'approved'
   `).all(listId);
 
   if (voteRows.length === 0) {
@@ -615,17 +719,25 @@ router.post('/chart/:listId/publish', ...requirePerm('chart'), (req, res) => {
   }
 
   const adjustments = db.prepare(
-    'SELECT id, score_adjustment FROM list_tracks WHERE list_id = ?'
+    "SELECT id, score_adjustment FROM list_tracks WHERE list_id = ? AND moderation_status = 'approved'"
   ).all(listId);
   const adjustMap = new Map(adjustments.map(a => [a.id, a.score_adjustment || 0]));
 
   const scoreMap = aggregateScores(voteRows, list.max_votes, list.score_rules);
 
+  const trackMeta = db.prepare(`
+    SELECT id, artist
+    FROM list_tracks
+    WHERE list_id = ? AND moderation_status = 'approved'
+  `).all(listId);
+  const artistMap = new Map(trackMeta.map(t => [t.id, t.artist || '']));
+
   const results = [...scoreMap.entries()].map(([track_id, s]) => ({
     track_id,
+    artist: artistMap.get(track_id) || '',
     score:      s.score + (adjustMap.get(track_id) || 0),
     vote_count: s.vote_count,
-  })).sort((a, b) => b.score - a.score || b.vote_count - a.vote_count).slice(0, 100);
+  })).sort((a, b) => b.score - a.score || b.vote_count - a.vote_count || a.artist.localeCompare(b.artist)).slice(0, 100);
 
   const upsert = db.prepare(`
     INSERT INTO chart_history (list_id, track_id, week, year, position, score, vote_count)
@@ -1219,15 +1331,129 @@ router.post('/season-reset/:listId', ...requirePerm('reset'), (req, res) => {
 router.patch('/tracks/:trackId/score-adjustment', ...requirePerm('scoring'), (req, res) => {
   const db      = getDb();
   const trackId = Number(req.params.trackId);
-  const track   = db.prepare('SELECT id, list_id FROM list_tracks WHERE id = ?').get(trackId);
+  const track   = db.prepare(`
+    SELECT lt.id, lt.list_id, lt.artist, lt.title, lt.score_adjustment, l.name AS list_name
+    FROM list_tracks lt JOIN lists l ON l.id = lt.list_id WHERE lt.id = ?
+  `).get(trackId);
   if (!track) return res.status(404).json({ error: 'Track niet gevonden' });
 
   const adjustment = Number(req.body?.adjustment ?? 0);
   if (isNaN(adjustment)) return res.status(400).json({ error: 'Ongeldige waarde' });
 
   db.prepare('UPDATE list_tracks SET score_adjustment = ? WHERE id = ?').run(adjustment, trackId);
+  logAction({
+    actor: req.user?.username, action: 'track.score_adjust', list_id: track.list_id,
+    target: `${track.artist} - ${track.title}`,
+    detail: { list: track.list_name, previous: track.score_adjustment || 0, adjustment },
+  });
   republishChart(track.list_id);
   res.json({ ok: true, adjustment });
+});
+
+/**
+ * PATCH /api/admin/tracks/:trackId/cover
+ * Handmatig cover_url aanpassen of leegmaken.
+ * Body: { cover_url: string|null }
+ */
+router.patch('/tracks/:trackId/cover', ...requirePerm('tracks'), (req, res) => {
+  const db      = getDb();
+  const trackId = Number(req.params.trackId);
+  const track   = db.prepare(`
+    SELECT lt.id, lt.list_id, lt.artist, lt.title, lt.cover_url, l.name AS list_name
+    FROM list_tracks lt
+    JOIN lists l ON l.id = lt.list_id
+    WHERE lt.id = ?
+  `).get(trackId);
+  if (!track) return res.status(404).json({ error: 'Track niet gevonden' });
+
+  const raw = req.body?.cover_url;
+  const coverUrl = raw == null ? null : String(raw).trim();
+  if (coverUrl && !/^https?:\/\//i.test(coverUrl)) {
+    return res.status(400).json({ error: 'cover_url moet met http:// of https:// beginnen' });
+  }
+
+  const normalized = coverUrl || null;
+  const isPlaceholder = normalized ? (isPlaceholderCoverUrl(normalized) ? 1 : 0) : 0;
+
+  db.prepare('UPDATE list_tracks SET cover_url = ?, cover_is_placeholder = ? WHERE id = ?')
+    .run(normalized, isPlaceholder, trackId);
+
+  logAction({
+    actor: req.user?.username,
+    action: 'track.cover_update',
+    list_id: track.list_id,
+    target: `${track.artist} - ${track.title}`,
+    detail: {
+      list: track.list_name,
+      previous: track.cover_url || null,
+      cover_url: normalized,
+      cover_is_placeholder: isPlaceholder,
+    },
+  });
+
+  res.json({ ok: true, cover_url: normalized, cover_is_placeholder: isPlaceholder });
+});
+
+// PATCH /api/admin/lists/:listId/tracks/batch-adjust — meerdere aanpassingen in één keer opslaan
+router.patch('/lists/:listId/tracks/batch-adjust', ...requirePerm('scoring'), (req, res) => {
+  const db     = getDb();
+  const listId = Number(req.params.listId);
+  if (!db.prepare('SELECT id FROM lists WHERE id = ?').get(listId)) {
+    return res.status(404).json({ error: 'Lijst niet gevonden' });
+  }
+  const changes = req.body;
+  if (!Array.isArray(changes) || changes.length === 0) {
+    return res.status(400).json({ error: 'Geen wijzigingen' });
+  }
+  const update = db.prepare('UPDATE list_tracks SET score_adjustment = ? WHERE id = ? AND list_id = ?');
+  const getTrack = db.prepare('SELECT artist, title, score_adjustment FROM list_tracks WHERE id = ? AND list_id = ?');
+  const auditChanges = [];
+  db.transaction(() => {
+    for (const { id, score_adjustment } of changes) {
+      const adj = Number(score_adjustment ?? 0);
+      const track = getTrack.get(Number(id), listId);
+      if (!isNaN(adj) && track && adj !== (track.score_adjustment || 0)) {
+        update.run(adj, Number(id), listId);
+        auditChanges.push({ ...track, adjustment: adj });
+      }
+    }
+  })();
+  const list = db.prepare('SELECT name FROM lists WHERE id = ?').get(listId);
+  auditChanges.forEach(track => logAction({
+    actor: req.user?.username, action: 'track.score_adjust', list_id: listId,
+    target: `${track.artist} - ${track.title}`,
+    detail: { list: list?.name, previous: track.score_adjustment || 0, adjustment: track.adjustment },
+  }));
+  republishChart(listId);
+  res.json({ ok: true, updated: changes.length });
+});
+
+// DELETE /api/admin/tracks/:trackId — verwijder track zonder stemmen
+router.delete('/tracks/:trackId', ...requirePerm('tracks'), (req, res) => {
+  const db      = getDb();
+  const trackId = Number(req.params.trackId);
+  const track   = db.prepare(`
+    SELECT lt.id, lt.list_id, lt.artist, lt.title, l.name AS list_name
+    FROM list_tracks lt JOIN lists l ON l.id = lt.list_id WHERE lt.id = ?
+  `).get(trackId);
+  if (!track) return res.status(404).json({ error: 'Track niet gevonden' });
+
+  // Blokkeer alleen als er goedgekeurde of openstaande stemmen zijn
+  const activeVotes = db.prepare(`
+    SELECT COUNT(*) AS n FROM votes v
+    JOIN registrations r ON r.id = v.registration_id
+    WHERE v.track_id = ? AND r.approved = 1 AND (v.approved IS NULL OR v.approved = 1)
+  `).get(trackId).n;
+  if (activeVotes > 0) return res.status(400).json({ error: 'Kan track niet verwijderen: heeft stemmen' });
+
+  const deletedVotes = db.prepare('DELETE FROM votes WHERE track_id = ?').run(trackId).changes;
+  db.prepare('DELETE FROM list_tracks WHERE id = ?').run(trackId);
+  logAction({
+    actor: req.user?.username, action: 'track.delete', list_id: track.list_id,
+    target: `${track.artist} - ${track.title}`,
+    detail: { list: track.list_name, votesDeleted: deletedVotes },
+  });
+  res.json({ ok: true });
 });
 
 /**
@@ -1361,6 +1587,79 @@ router.get('/audit-log', ...requirePerm('audit'), (req, res) => {
   res.json({
     total, page, limit,
     rows: rows.map(r => ({ ...r, detail: r.detail ? JSON.parse(r.detail) : null })),
+  });
+});
+
+// ── PlayIt integratie: Tracks die ontbreken in PlayIt ───────────────────────
+
+/**
+ * GET /api/admin/lists/:listId/missing-playit-tracks
+ * Geeft alle tracks terug die in de huidige gepubliceerde hitlijst staan,
+ * maar NIET in PlayIt Live zitten.
+ * Gesorteerd op huidige positie in de hitlijst (voor de meest recente week).
+ * 
+ * Response:
+ * {
+ *   missing: [
+ *     { id, title, artist, cover_url, year, chart_position, chart_score, vote_count },
+ *     ...
+ *   ],
+ *   total_in_list: number,
+ *   missing_count: number,
+ *   playit_sync_status: { lastSync, trackCount, ... }
+ * }
+ */
+router.get('/lists/:listId/missing-playit-tracks', ...requirePerm('tracks'), (req, res) => {
+  const db = getDb();
+  const listId = Number(req.params.listId);
+  
+  const list = db.prepare('SELECT id, name FROM lists WHERE id = ?').get(listId);
+  if (!list) return res.status(404).json({ error: 'Lijst niet gevonden' });
+
+  // Huidige ISO week
+  const { week, year } = currentISOWeek();
+
+  // Haal alle approved tracks in de hitlijst op, gesorteerd op chart position
+  const listTracks = db.prepare(`
+    SELECT lt.id, lt.title, lt.artist, lt.cover_url, lt.year,
+           ch.position AS chart_position, ch.score AS chart_score, ch.vote_count
+    FROM list_tracks lt
+    LEFT JOIN chart_history ch ON ch.track_id = lt.id AND ch.list_id = ? AND ch.week = ? AND ch.year = ?
+    WHERE lt.list_id = ? AND lt.moderation_status = 'approved'
+    ORDER BY COALESCE(ch.position, 9999) ASC
+  `).all(listId, week, year, listId);
+
+  if (listTracks.length === 0) {
+    return res.json({
+      missing: [],
+      total_in_list: 0,
+      missing_count: 0,
+      playit_sync_status: playitSync.getStatus(),
+    });
+  }
+
+  // Haal alle PlayIt tracks op (artist + title)
+  const playitTracks = db.prepare(`
+    SELECT LOWER(artist) AS artist_lower, LOWER(title) AS title_lower
+    FROM playit_tracks
+  `).all();
+
+  // Maak een set voor snelle lookup
+  const playitSet = new Set(
+    playitTracks.map(t => `${t.artist_lower}|${t.title_lower}`)
+  );
+
+  // Filter tracks die NIET in PlayIt staan
+  const missing = listTracks.filter(lt => {
+    const key = `${(lt.artist || '').toLowerCase()}|${(lt.title || '').toLowerCase()}`;
+    return !playitSet.has(key);
+  });
+
+  res.json({
+    missing,
+    total_in_list: listTracks.length,
+    missing_count: missing.length,
+    playit_sync_status: playitSync.getStatus(),
   });
 });
 

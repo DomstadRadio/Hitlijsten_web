@@ -11,8 +11,6 @@ export default function ChartView({ list }) {
   const [error, setError]       = useState('');
   const [includeAll, setIncl]   = useState(false);
   const [showZero, setShowZero] = useState(false);
-  const [editAdj, setEditAdj]   = useState({}); // trackId → string (tijdelijk invoerveld)
-  const [savingAdj, setSavingAdj] = useState({}); // trackId → bool
   const [publishing, setPublishing] = useState(false);
   const [publishResult, setPublishResult] = useState(null); // { week, year, trackCount }
 
@@ -23,10 +21,6 @@ export default function ChartView({ list }) {
       const params = includeAll ? { includeAll: 1 } : {};
       const res = await axios.get(`${API}/admin/chart-live/${list.id}`, { params });
       setData(res.data);
-      // Initialiseer invoervelden vanuit huidige adjustments
-      const adj = {};
-      for (const row of res.data.chart) adj[row.track_id] = String(row.score_adjustment || 0);
-      setEditAdj(adj);
     } catch (e) {
       setError(e?.response?.data?.error || e.message);
     } finally {
@@ -36,17 +30,13 @@ export default function ChartView({ list }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const saveAdjustment = async (trackId) => {
-    const val = Number(editAdj[trackId]);
-    if (isNaN(val)) return;
-    setSavingAdj(s => ({ ...s, [trackId]: true }));
+  const deleteTrack = async (trackId, title, artist) => {
+    if (!window.confirm(`"${artist} – ${title}" verwijderen?\n\nDeze track heeft geen stemmen en wordt permanent verwijderd.`)) return;
     try {
-      await axios.patch(`${API}/admin/tracks/${trackId}/score-adjustment`, { adjustment: val });
+      await axios.delete(`${API}/admin/tracks/${trackId}`);
       load();
     } catch (e) {
-      alert(e.response?.data?.error || 'Opslaan mislukt');
-    } finally {
-      setSavingAdj(s => ({ ...s, [trackId]: false }));
+      alert(e.response?.data?.error || 'Verwijderen mislukt');
     }
   };
 
@@ -134,9 +124,7 @@ export default function ChartView({ list }) {
                 <th style={{ padding: '10px 12px' }}>Titel</th>
                 <th style={{ padding: '10px 12px', width: 80,  textAlign: 'right' }}>Score</th>
                 <th style={{ padding: '10px 12px', width: 90,  textAlign: 'right' }}>Stemmen</th>
-                {hasPerm('scoring') && (
-                <th style={{ padding: '10px 12px', width: 140, textAlign: 'right' }}>Bonus/Malus</th>
-                )}
+                {hasPerm('tracks') && showZero && <th style={{ width: 40 }} />}
               </tr>
             </thead>
             <tbody>
@@ -150,25 +138,16 @@ export default function ChartView({ list }) {
                   </td>
                   <td style={{ padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row.score}</td>
                   <td style={{ padding: '8px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{row.vote_count}</td>
-                  {hasPerm('scoring') && (
-                  <td style={{ padding: '6px 12px', textAlign: 'right' }}>
-                    <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', alignItems: 'center' }}>
-                      <input
-                        type="number"
-                        value={editAdj[row.track_id] ?? '0'}
-                        onChange={e => setEditAdj(a => ({ ...a, [row.track_id]: e.target.value }))}
-                        style={{ width: 56, textAlign: 'center', padding: '3px 6px', fontSize: 13 }}
-                        onKeyDown={e => e.key === 'Enter' && saveAdjustment(row.track_id)}
-                      />
+                  {hasPerm('tracks') && showZero && (
+                  <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                    {row.vote_count === 0 && (
                       <button
-                        className="btn btn-sm btn-outline"
-                        style={{ padding: '3px 8px', fontSize: 12 }}
-                        disabled={savingAdj[row.track_id]}
-                        onClick={() => saveAdjustment(row.track_id)}
-                      >
-                        {savingAdj[row.track_id] ? '…' : '✓'}
-                      </button>
-                    </div>
+                        className="btn btn-sm"
+                        style={{ padding: '3px 8px', fontSize: 12, background: '#c00', color: '#fff', border: 'none' }}
+                        onClick={() => deleteTrack(row.track_id, row.title, row.artist)}
+                        title="Verwijderen"
+                      >🗑</button>
+                    )}
                   </td>
                   )}
                 </tr>

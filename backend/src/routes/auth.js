@@ -4,7 +4,7 @@
  *
  * Permissies worden opgeslagen als komma-gescheiden string in users.permissions.
  * '*' = alle rechten (superadmin).
- * Mogelijke permissies: lists, tracks, submissions, voters, chart, settings, users
+ * Mogelijke permissies: lists, tracks, submissions, voters, blocks, reset, scoring, chart, forms, settings, users, audit
  */
 
 const express  = require('express');
@@ -18,7 +18,10 @@ const router = express.Router();
 const JWT_SECRET  = process.env.JWT_SECRET || 'change-me-in-production';
 const JWT_EXPIRES = '8h';
 
-const ALL_PERMISSIONS = ['lists', 'tracks', 'submissions', 'voters', 'chart', 'forms', 'settings', 'users'];
+const ALL_PERMISSIONS = [
+  'lists', 'tracks', 'submissions', 'voters', 'blocks', 'reset',
+  'scoring', 'chart', 'forms', 'settings', 'users', 'audit',
+];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -178,10 +181,14 @@ router.delete('/users/:id', requirePerm('users'), (req, res) => {
   if (Number(req.params.id) === req.user.id) {
     return res.status(400).json({ error: 'Je kunt je eigen account niet verwijderen' });
   }
-  const info = getDb()
+  const db = getDb();
+  const user = db.prepare('SELECT username, role, permissions FROM users WHERE id = ?').get(req.params.id);
+  if (!user) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
+  const info = db
     .prepare('DELETE FROM users WHERE id = ?')
     .run(req.params.id);
   if (!info.changes) return res.status(404).json({ error: 'Gebruiker niet gevonden' });
+  logAction({ actor: req.user?.username, action: 'user.delete', target: user.username, detail: { role: user.role, permissions: user.permissions } });
   res.json({ ok: true });
 });
 

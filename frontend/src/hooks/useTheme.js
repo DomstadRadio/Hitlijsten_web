@@ -16,7 +16,11 @@ const DEFAULTS = {
 
 export default function useTheme(theme) {
   useEffect(() => {
-    const t = { ...DEFAULTS, ...theme };
+    // Lege/null thema-waarden mogen de defaults niet overschrijven
+    const t = { ...DEFAULTS };
+    for (const [k, v] of Object.entries(theme || {})) {
+      if (v !== '' && v !== null && v !== undefined) t[k] = v;
+    }
     const root = document.documentElement;
     root.style.setProperty('--color-primary',   t.primaryColor);
     root.style.setProperty('--color-secondary', t.secondaryColor);

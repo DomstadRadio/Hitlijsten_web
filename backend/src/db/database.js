@@ -36,9 +36,23 @@ function getDb() {
   safeAddColumn(_db, 'registrations', 'approved',          'INTEGER DEFAULT NULL');
   safeAddColumn(_db, 'registrations', 'verify_code',       'TEXT');
   safeAddColumn(_db, 'registrations', 'reminder_sent_at',  'TEXT DEFAULT NULL');
+  safeAddColumn(_db, 'votes',         'approved',          'INTEGER DEFAULT NULL');
   // Feature: flexibele puntentelling
   safeAddColumn(_db, 'lists',         'score_rules',        'TEXT DEFAULT NULL');  // JSON: [10,7,5,…]
   safeAddColumn(_db, 'list_tracks',   'score_adjustment',   'INTEGER DEFAULT 0');  // handmatige bonus/malus
+  safeAddColumn(_db, 'list_tracks',   'cover_is_placeholder', 'INTEGER NOT NULL DEFAULT 0');
+  // Ingezonden tracks blijven buiten de catalogus totdat ze zijn goedgekeurd.
+  safeAddColumn(_db, 'list_tracks',   'moderation_status',  "TEXT NOT NULL DEFAULT 'approved'");
+  safeAddColumn(_db, 'list_tracks',   'submitted_only',     'INTEGER NOT NULL DEFAULT 0');
+  _db.exec(`
+    UPDATE votes
+    SET approved = 1
+    WHERE approved IS NULL
+      AND EXISTS (
+        SELECT 1 FROM registrations r
+        WHERE r.id = votes.registration_id AND r.approved = 1
+      )
+  `);
   // Feature: aanpasbare herinnerings-e-mail per lijst
   safeAddColumn(_db, 'lists',         'reminder_subject',       'TEXT DEFAULT NULL');
   safeAddColumn(_db, 'lists',         'reminder_html',          'TEXT DEFAULT NULL');
@@ -48,6 +62,10 @@ function getDb() {
   safeAddColumn(_db, 'lists',         'voting_paused_message',   'TEXT DEFAULT NULL');
   // Feature: privacy statement link
   safeAddColumn(_db, 'lists',         'privacy_url',             'TEXT DEFAULT NULL');
+  // Feature: anti-spam spelregels + limiet per artiest
+  safeAddColumn(_db, 'lists',         'voting_rules_text',       'TEXT DEFAULT NULL');
+  safeAddColumn(_db, 'lists',         'voting_rules_required',   'INTEGER NOT NULL DEFAULT 0');
+  safeAddColumn(_db, 'lists',         'max_tracks_per_artist',   'INTEGER NOT NULL DEFAULT 0');
   // Feature: audit log tabel
   try {
     _db.exec(`
@@ -81,6 +99,22 @@ function getDb() {
   // Indices (kunnen falen als kolom nog niet bestaat — wordt genegeerd)
   try { _db.exec('CREATE INDEX IF NOT EXISTS idx_reg_approved ON registrations(list_id, approved)'); } catch (_) {}
   try { _db.exec('CREATE INDEX IF NOT EXISTS idx_reg_reminder ON registrations(list_id, reminder_sent_at)'); } catch (_) {}
+  try { _db.exec('CREATE INDEX IF NOT EXISTS idx_list_tracks_moderation ON list_tracks(list_id, moderation_status)'); } catch (_) {}
+  try {
+    _db.exec(`
+      UPDATE list_tracks
+      SET cover_is_placeholder = CASE
+        WHEN cover_url IS NOT NULL AND (
+          LOWER(cover_url) LIKE '%2a96cbd8b46e442fc41c2b86b821562f%' OR
+          LOWER(cover_url) LIKE '%placeholder%' OR
+          LOWER(cover_url) LIKE '%noimage%' OR
+          LOWER(cover_url) LIKE '%/default.%' OR
+          LOWER(cover_url) LIKE '%/default_%'
+        ) THEN 1
+        ELSE COALESCE(cover_is_placeholder, 0)
+      END
+    `);
+  } catch (_) {}
   // Feature: blokkeerlijst
   try {
     _db.exec(`
@@ -130,6 +164,9 @@ function migrate(db) {
       bg_image      TEXT,
       theme         TEXT    NOT NULL DEFAULT '{}',     -- JSON: kleuren, lettertype, hoeken
       playit_group  TEXT,                              -- PlayIt Live trackgroep filter
+      voting_rules_text     TEXT,
+      voting_rules_required INTEGER NOT NULL DEFAULT 0,
+      max_tracks_per_artist INTEGER NOT NULL DEFAULT 0,
       created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
       closes_at     TEXT
     );
@@ -145,6 +182,8 @@ function migrate(db) {
       cover_url     TEXT,
       preview_url   TEXT,
       year          INTEGER,
+      moderation_status TEXT NOT NULL DEFAULT 'approved', -- pending | approved | rejected
+      submitted_only INTEGER NOT NULL DEFAULT 0,
       added_at      TEXT    NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -171,6 +210,7 @@ function migrate(db) {
       list_id         INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
       track_id        INTEGER NOT NULL REFERENCES list_tracks(id) ON DELETE CASCADE,
       position        INTEGER NOT NULL,
+      approved        INTEGER DEFAULT NULL,
       voted_at        TEXT    NOT NULL DEFAULT (datetime('now'))
     );
 

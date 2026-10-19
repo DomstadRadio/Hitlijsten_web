@@ -28,9 +28,11 @@ router.post('/:slug/register', async (req, res) => {
   if (list.status !== 'open') return res.status(403).json({ error: 'Stemmen is gesloten' });
   if (list.voting_paused) return res.status(403).json({ error: list.voting_paused_message || 'Stemmen is tijdelijk gepauzeerd', paused: true });
 
-  const { emailAddr, name, phone, machineId } = req.body;
-  if (!name || !name.trim()) return res.status(400).json({ error: 'Naam is verplicht' });
+  const { emailAddr, name, phone, machineId, rulesAccepted } = req.body;
   if (!emailAddr) return res.status(400).json({ error: 'E-mailadres is verplicht' });
+  if (list.voting_rules_required && !rulesAccepted) {
+    return res.status(400).json({ error: 'Je moet eerst akkoord gaan met de spelregels' });
+  }
 
   const tester = isTestEmail(emailAddr);
 
@@ -189,6 +191,21 @@ router.post('/:slug/submit', async (req, res) => {
     return res.status(400).json({ error: 'Je kunt niet twee keer dezelfde track kiezen' });
   }
 
+  const perArtistCap = Math.max(0, Number(list.max_tracks_per_artist) || 0);
+  if (perArtistCap > 0) {
+    const artistCounter = new Map();
+    for (const v of votes) {
+      const artistKey = String(v.artist || '').trim().toLowerCase();
+      const count = (artistCounter.get(artistKey) || 0) + 1;
+      artistCounter.set(artistKey, count);
+      if (count > perArtistCap) {
+        return res.status(400).json({
+          error: `Je mag maximaal ${perArtistCap} nummer(s) van dezelfde artiest kiezen`,
+        });
+      }
+    }
+  }
+
   const reg = db.prepare(
     'SELECT * FROM registrations WHERE verify_token = ? AND list_id = ? AND verified = 1'
   ).get(token, list.id);
@@ -202,19 +219,25 @@ router.post('/:slug/submit', async (req, res) => {
   if (existingVote && !isWhitelisted(reg.machine_id) && !isTestEmail(reg.email)) return res.status(409).json({ error: 'Je hebt al gestemd' });
 
   const findByArtistTitle = db.prepare(`
-    SELECT id, title, artist FROM list_tracks
+    SELECT id, title, artist, moderation_status, submitted_only FROM list_tracks
      WHERE list_id = ?
        AND LOWER(artist) = LOWER(?)
        AND LOWER(title)  = LOWER(?)
      LIMIT 1
   `);
   const findByExternal = db.prepare(
-    'SELECT id, title, artist FROM list_tracks WHERE list_id = ? AND source = ? AND external_id = ?'
+    'SELECT id, title, artist, moderation_status, submitted_only FROM list_tracks WHERE list_id = ? AND source = ? AND external_id = ?'
   );
   const insertTrack = db.prepare(`
-    INSERT INTO list_tracks (list_id, source, external_id, title, artist, album, cover_url, year)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO list_tracks (
+      list_id, source, external_id, title, artist, album, cover_url, year,
+      moderation_status, submitted_only
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1)
   `);
+  const reopenSubmittedTrack = db.prepare(
+    "UPDATE list_tracks SET moderation_status = 'pending' WHERE id = ? AND submitted_only = 1 AND moderation_status = 'rejected'"
+  );
   const insertVote = db.prepare(
     'INSERT INTO votes (registration_id, list_id, track_id, position) VALUES (?, ?, ?, ?)'
   );
@@ -246,6 +269,8 @@ router.post('/:slug/submit', async (req, res) => {
           v.year    || null,
         );
         row = { id: info.lastInsertRowid, title: v.title, artist: v.artist };
+      } else if (row.submitted_only && row.moderation_status === 'rejected') {
+        reopenSubmittedTrack.run(row.id);
       }
       result.push({ ...row, position: Number(v.position) });
     }

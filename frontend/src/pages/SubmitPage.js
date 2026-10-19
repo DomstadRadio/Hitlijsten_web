@@ -115,6 +115,20 @@ export default function SubmitPage() {
 
   const submit = async () => {
     if (selected.length === 0) return setError('Selecteer minstens één nummer');
+
+    const perArtistCap = Math.max(0, Number(list?.max_tracks_per_artist) || 0);
+    if (perArtistCap > 0) {
+      const artistCounter = new Map();
+      for (const track of selected) {
+        const key = String(track.artist || '').trim().toLowerCase();
+        const count = (artistCounter.get(key) || 0) + 1;
+        artistCounter.set(key, count);
+        if (count > perArtistCap) {
+          return setError(`Je mag maximaal ${perArtistCap} nummer(s) van dezelfde artiest kiezen`);
+        }
+      }
+    }
+
     setError('');
     setSubmitting(true);
     try {
@@ -160,126 +174,130 @@ export default function SubmitPage() {
           Sleep ze in volgorde van voorkeur.
         </p>
 
-        <div className="vote-layout">
-          {/* Linker kolom: zoeken */}
-          <div>
-            <h3 style={{ marginBottom:8 }}>Zoek een nummer</h3>
-            <input
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder="Typ artiest of titel…"
-              style={{ marginBottom:12 }}
-              autoFocus
-            />
-            <div className="vote-results">
-              {query.length < 2 && (
-                <p className="helper-text">Type minstens 2 tekens om te zoeken.</p>
-              )}
-              {query.length >= 2 && searching && (
-                <p className="helper-text">Zoeken…</p>
-              )}
-              {query.length >= 2 && !searching && results.length === 0 && (
-                <p className="helper-text">Geen nummers gevonden.</p>
-              )}
-              {(() => {
-                const existing = results.filter(t => t.existing);
-                const other    = results.filter(t => !t.existing);
-                const renderRow = t => (
-                  <div key={t.external_id} className="track-card" style={{ cursor:'pointer' }}
-                    onClick={() => addTrack(t)}>
-                    {t.cover_url
-                      ? <img src={t.cover_url} alt="" />
-                      : <div style={{ width:56, height:56, background:'#ddd', borderRadius:8, flexShrink:0 }} />
-                    }
-                    <div className="track-info">
-                      <div className="track-title">{t.title}</div>
-                      <div className="track-artist">{t.artist}</div>
-                      {t.existing
-                        ? <div style={{ fontSize:11, color:'#080', marginTop:2, fontWeight:600 }}>✓ Al in de lijst</div>
-                        : t.source === 'spotify'
-                          ? <div style={{ fontSize:11, color:'#1DB954', marginTop:2 }}>via Spotify</div>
-                          : null
-                      }
-                    </div>
-                    <span style={{ color:'var(--color-primary)', fontSize:22 }}>+</span>
-                  </div>
-                );
-                return (<>
-                  {existing.length > 0 && (
-                    <>
-                      <div style={{ fontSize:11, fontWeight:700, color:'#080', textTransform:'uppercase', letterSpacing:1, margin:'4px 0 2px' }}>Al in de lijst</div>
-                      {existing.map(renderRow)}
-                      {other.length > 0 && <div style={{ fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase', letterSpacing:1, margin:'8px 0 2px' }}>Andere resultaten</div>}
-                    </>
-                  )}
-                  {other.map(renderRow)}
-                </>);
-              })()}
+        {Number(list.max_tracks_per_artist) > 0 && (
+          <p className="helper-text" style={{ marginBottom: 14 }}>
+            Anti-spam regel: maximaal <strong>{Number(list.max_tracks_per_artist)}</strong> nummer(s) per artiest.
+          </p>
+        )}
+
+        {/* Zoekvenster */}
+        <h3 style={{ marginBottom:8 }}>Zoek een nummer</h3>
+        <input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Typ artiest of titel…"
+          style={{ marginBottom:16 }}
+          autoFocus
+        />
+
+        {/* Jouw keuzes — direct onder het zoekvenster */}
+        <div style={{ marginBottom:24 }}>
+          <h3 style={{ marginBottom:8 }}>
+            Jouw keuzes ({selected.length}/{list.max_votes})
+          </h3>
+
+          {list.score_rules && Array.isArray(list.score_rules) && list.score_rules.length > 0 && (
+            <div style={{
+              background:'var(--color-card, #fff)',
+              border:'1px solid var(--color-border, #e0e0e0)',
+              borderRadius:8, padding:'8px 12px', marginBottom:12, fontSize:13
+            }}>
+              <strong style={{ color:'var(--color-primary)' }}>Puntenverdeling:</strong>{' '}
+              {list.score_rules.map((pts, i) => (
+                <span key={i} style={{ marginRight:8 }}>
+                  <span style={{ fontWeight:600 }}>#{i + 1}</span> = {pts} {pts === 1 ? 'punt' : 'punten'}
+                  {i < list.score_rules.length - 1 ? ',' : ''}
+                </span>
+              ))}
             </div>
-          </div>
+          )}
 
-          {/* Rechter kolom: jouw keuzes */}
-          <div>
-            <h3 style={{ marginBottom:8 }}>
-              Jouw keuzes ({selected.length}/{list.max_votes})
-            </h3>
+          {selected.length === 0 ? (
+            <p className="helper-text">Zoek hieronder naar een nummer en tik erop om het toe te voegen.</p>
+          ) : (
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={selected.map(t => t.external_id)} strategy={verticalListSortingStrategy}>
+                <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                  {selected.map((t, i) => (
+                    <SortableTrackRow key={t.external_id} track={t} position={i + 1} onRemove={removeTrack} />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          )}
 
-            {/* Score-legenda */}
-            {list.score_rules && Array.isArray(list.score_rules) && list.score_rules.length > 0 && (
-              <div style={{
-                background:'var(--color-card, #fff)',
-                border:'1px solid var(--color-border, #e0e0e0)',
-                borderRadius:8, padding:'8px 12px', marginBottom:12, fontSize:13
-              }}>
-                <strong style={{ color:'var(--color-primary)' }}>Puntenverdeling:</strong>{' '}
-                {list.score_rules.map((pts, i) => (
-                  <span key={i} style={{ marginRight:8 }}>
-                    <span style={{ fontWeight:600 }}>#{i + 1}</span> = {pts} {pts === 1 ? 'punt' : 'punten'}
-                    {i < list.score_rules.length - 1 ? ',' : ''}
-                  </span>
-                ))}
-              </div>
-            )}
+          {error && <p className="error-text" style={{ marginTop:12 }}>{error}</p>}
 
-            {selected.length === 0 ? (
-              <p className="helper-text">Zoek hierboven naar een nummer en tik erop om het toe te voegen.</p>
-            ) : (
-              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                <SortableContext items={selected.map(t => t.external_id)} strategy={verticalListSortingStrategy}>
-                  <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                    {selected.map((t, i) => (
-                      <SortableTrackRow key={t.external_id} track={t} position={i + 1} onRemove={removeTrack} />
-                    ))}
-                  </div>
-                </SortableContext>
-              </DndContext>
-            )}
+          {selected.length > 0 && (
+            <div style={{ marginTop:16 }}>
+              <label style={{ display:'block', fontWeight:600, marginBottom:6, fontSize:14 }}>
+                Opmerking (optioneel)
+              </label>
+              <textarea
+                value={comment}
+                onChange={e => setComment(e.target.value)}
+                placeholder="Waarom koos je deze nummers? Of heb je iets te melden?"
+                rows={3}
+                style={{ width:'100%', resize:'vertical', padding:10, borderRadius:8, border:'1px solid #ddd', fontSize:14 }}
+              />
+            </div>
+          )}
 
-            {error && <p className="error-text" style={{ marginTop:12 }}>{error}</p>}
-
-            {selected.length > 0 && (
-              <div style={{ marginTop:20 }}>
-                <label style={{ display:'block', fontWeight:600, marginBottom:6, fontSize:14 }}>
-                  Opmerking (optioneel)
-                </label>
-                <textarea
-                  value={comment}
-                  onChange={e => setComment(e.target.value)}
-                  placeholder="Waarom koos je deze nummers? Of heb je iets te melden?"
-                  rows={3}
-                  style={{ width:'100%', resize:'vertical', padding:10, borderRadius:8, border:'1px solid #ddd', fontSize:14 }}
-                />
-              </div>
-            )}
-
-            {selected.length > 0 && (
-              <button className="btn" style={{ marginTop:12, width:'100%' }}
-                onClick={submit} disabled={submitting}>
-                {submitting ? 'Indienen…' : `Stem indienen (${selected.length} nummers) →`}
-              </button>
-            )}
-          </div>
+          {selected.length > 0 && (
+            <button className="btn" style={{ marginTop:12, width:'100%' }}
+              onClick={submit} disabled={submitting}>
+              {submitting ? 'Indienen…' : `Stem indienen (${selected.length} nummers) →`}
+            </button>
+          )}
         </div>
+
+        {/* Zoekresultaten — onder de keuzes */}
+        <div className="vote-results" style={{ maxHeight: 'none' }}>
+          {query.length < 2 && (
+            <p className="helper-text">Type minstens 2 tekens om te zoeken.</p>
+          )}
+          {query.length >= 2 && searching && (
+            <p className="helper-text">Zoeken…</p>
+          )}
+          {query.length >= 2 && !searching && results.length === 0 && (
+            <p className="helper-text">Geen nummers gevonden.</p>
+          )}
+          {(() => {
+            const existing = results.filter(t => t.existing);
+            const other    = results.filter(t => !t.existing);
+            const renderRow = t => (
+              <div key={t.external_id} className="track-card" style={{ cursor:'pointer' }}
+                onClick={() => addTrack(t)}>
+                {t.cover_url
+                  ? <img src={t.cover_url} alt="" />
+                  : <div style={{ width:56, height:56, background:'#ddd', borderRadius:8, flexShrink:0 }} />
+                }
+                <div className="track-info">
+                  <div className="track-title">{t.title}</div>
+                  <div className="track-artist">{t.artist}</div>
+                  {t.existing
+                    ? <div style={{ fontSize:11, color:'#080', marginTop:2, fontWeight:600 }}>✓ Al in de lijst</div>
+                    : t.source === 'spotify'
+                      ? <div style={{ fontSize:11, color:'#1DB954', marginTop:2 }}>via Spotify</div>
+                      : null
+                  }
+                </div>
+                <span style={{ color:'var(--color-primary)', fontSize:22 }}>+</span>
+              </div>
+            );
+            return (<>
+              {existing.length > 0 && (
+                <>
+                  <div style={{ fontSize:11, fontWeight:700, color:'#080', textTransform:'uppercase', letterSpacing:1, margin:'4px 0 2px' }}>Al in de lijst</div>
+                  {existing.map(renderRow)}
+                  {other.length > 0 && <div style={{ fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase', letterSpacing:1, margin:'8px 0 2px' }}>Andere resultaten</div>}
+                </>
+              )}
+              {other.map(renderRow)}
+            </>);
+          })()}
+        </div>
+
       </div>
     </div>
   );

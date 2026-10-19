@@ -41,6 +41,7 @@ export default function VotePage() {
   const [submitting, setSubmitting] = useState(false);
   const [sent,      setSent]      = useState(false);
   const [error,     setError]     = useState('');
+  const [rulesAccepted, setRulesAccepted] = useState(false);
 
   const [codeInput,  setCodeInput]  = useState('');
   const [verifying,  setVerifying]  = useState(false);
@@ -66,13 +67,15 @@ export default function VotePage() {
   }, [slug]);
 
   const register = async () => {
-    if (!name.trim()) return setError('Naam is verplicht');
     if (!emailAddr) return setError('E-mailadres is verplicht');
+    if (list?.voting_rules_required && !rulesAccepted) {
+      return setError('Je moet eerst akkoord gaan met de spelregels');
+    }
     setError('');
     setSubmitting(true);
     try {
       await axios.post(`${API}/vote/${slug}/register`, {
-        emailAddr, name, phone, machineId: getMachineId(),
+        emailAddr, name, phone, machineId: getMachineId(), rulesAccepted,
       });
       setSent(true);
     } catch (err) {
@@ -199,6 +202,32 @@ export default function VotePage() {
           Kies daarna jouw favoriete {list.max_votes} nummers.
         </p>
 
+        {(list.voting_rules_text || list.voting_rules_required || Number(list.max_tracks_per_artist) > 0) && (
+          <div style={{
+            marginBottom: 16,
+            padding: '12px 14px',
+            borderRadius: 8,
+            border: '1px solid #f2d28b',
+            background: '#fff8e6',
+          }}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Spelregels</div>
+            {list.voting_rules_text ? (
+              <p style={{ whiteSpace: 'pre-line', margin: 0, fontSize: 14, lineHeight: 1.5 }}>
+                {list.voting_rules_text}
+              </p>
+            ) : (
+              <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>
+                Stem eerlijk en voorkom stem-bombs.
+              </p>
+            )}
+            {Number(list.max_tracks_per_artist) > 0 && (
+              <p style={{ margin: '8px 0 0', fontSize: 13, color: '#7a5a00' }}>
+                Maximaal {Number(list.max_tracks_per_artist)} nummer(s) per artiest per stem.
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="form-group">
           <label>Naam (optioneel)</label>
           <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Jouw naam" />
@@ -214,10 +243,28 @@ export default function VotePage() {
             placeholder="06-12345678" onKeyDown={e => e.key === 'Enter' && register()} />
         </div>
 
+        {list.voting_rules_required && (
+          <label style={{ display:'flex', flexDirection:'row', gap:8, alignItems:'flex-start', fontWeight:500, marginBottom: 8 }}>
+            <input
+              type="checkbox"
+              checked={rulesAccepted}
+              onChange={e => setRulesAccepted(e.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <span>Ik ga akkoord met de spelregels voor deze stemming.</span>
+          </label>
+        )}
+
+        {list.voting_rules_required && !rulesAccepted && (
+          <p className="error-text" style={{ marginTop: 0 }}>
+            Vink eerst "Ik ga akkoord met de spelregels" aan om je verificatiecode te ontvangen.
+          </p>
+        )}
+
         {error && <p className="error-text">{error}</p>}
 
         <button className="btn" style={{ width:'100%', marginTop:8 }}
-          onClick={register} disabled={submitting}>
+          onClick={register} disabled={submitting || (list.voting_rules_required && !rulesAccepted)}>
           {submitting ? 'Aanmelden…' : 'Aanmelden & e-mail ontvangen →'}
         </button>
 

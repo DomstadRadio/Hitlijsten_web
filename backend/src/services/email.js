@@ -39,7 +39,23 @@ async function sendMail({ to, subject, html }) {
       auth:   { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
     });
   }
-  await transport.sendMail({ from: FROM(), to, subject, html });
+  const info = await transport.sendMail({ from: FROM(), to, subject, html });
+
+  const accepted = Array.isArray(info?.accepted) ? info.accepted : [];
+  const rejected = Array.isArray(info?.rejected) ? info.rejected : [];
+  const pending = Array.isArray(info?.pending) ? info.pending : [];
+
+  // Nodemailer kan succesvol resolven terwijl recipients niet zijn geaccepteerd.
+  // Door hier hard te falen wordt dit zichtbaar in API-responses en PM2 logs.
+  if (accepted.length === 0 || rejected.length > 0 || pending.length > 0) {
+    throw new Error(
+      `Mail transport issue: accepted=${accepted.length} rejected=${rejected.length} pending=${pending.length} response=${info?.response || 'n/a'}`
+    );
+  }
+
+  console.log(
+    `[mail] provider=${provider} to=${to} messageId=${info?.messageId || 'n/a'} response=${info?.response || 'n/a'}`
+  );
 }
 
 async function sendVerificationEmail({ to, name, listName, code }) {

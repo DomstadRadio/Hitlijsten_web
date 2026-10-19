@@ -86,6 +86,7 @@ router.get('/:slug', (req, res) => {
     LEFT JOIN prev_week pw ON pw.track_id = ch.track_id
     LEFT JOIN weeks_per_track wpt ON wpt.track_id = ch.track_id
     WHERE ch.list_id = ? AND ch.year = ? AND ch.week = ?
+      AND lt.moderation_status = 'approved'
     ORDER BY ch.position
   `).all(
     list.id, prev?.year ?? -1, prev?.week ?? -1,  // prev_week CTE

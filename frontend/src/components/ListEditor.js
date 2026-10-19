@@ -49,6 +49,9 @@ export default function ListEditor({ list, onSaved }) {
   const [playitGroup,setPlayitGroup]= useState(existing.playit_group|| '');
   const [redirectUrl, setRedirectUrl]= useState(existing.redirect_url || '');
   const [privacyUrl,   setPrivacyUrl]  = useState(existing.privacy_url   || '');
+  const [votingRulesText, setVotingRulesText] = useState(existing.voting_rules_text || '');
+  const [votingRulesRequired, setVotingRulesRequired] = useState(!!existing.voting_rules_required);
+  const [maxTracksPerArtist, setMaxTracksPerArtist] = useState(Number(existing.max_tracks_per_artist) || 0);
   const [theme,      setTheme]      = useState({ ...DEFAULT_THEME, ...(existing.theme || {}) });
   const [bgFile,     setBgFile]     = useState(null);
   const [saving,     setSaving]     = useState(false);
@@ -131,6 +134,9 @@ export default function ListEditor({ list, onSaved }) {
       form.append('playit_group', playitGroup);
       form.append('redirect_url', redirectUrl);
       form.append('privacy_url',   privacyUrl);
+      form.append('voting_rules_text', votingRulesText);
+      form.append('voting_rules_required', votingRulesRequired ? '1' : '0');
+      form.append('max_tracks_per_artist', String(maxTracksPerArtist));
       form.append('reminder_subject', reminderSubject);
       form.append('reminder_html',    reminderHtml);
       if (bgFile) form.append('bg_image', bgFile);
@@ -317,6 +323,49 @@ export default function ListEditor({ list, onSaved }) {
               placeholder="https://domstadradio.nl/privacy" />
             <span className="helper-text">Wordt getoond als link op het aanmeldformulier. Laat leeg om te verbergen.</span>
           </div>
+
+          <details className="form-group" style={{ background:'var(--surface, #f9f9f9)', borderRadius:8, padding:12, border:'1px solid var(--border, #e8e8e8)' }}>
+            <summary style={{ fontWeight:600, cursor:'pointer', userSelect:'none' }}>
+              🛡 Spelregels tegen stem-bombs
+            </summary>
+            <span className="helper-text" style={{ display:'block', margin:'6px 0 10px' }}>
+              Stel hier regels in die stemmers moeten accepteren, en beperk eventueel hoeveel nummers per artiest gekozen mogen worden.
+            </span>
+
+            <label style={{ display:'flex', flexDirection:'row', alignItems:'center', gap:8, marginBottom:10 }}>
+              <input
+                type="checkbox"
+                checked={votingRulesRequired}
+                onChange={e => setVotingRulesRequired(e.target.checked)}
+              />
+              Akkoord op spelregels verplicht maken
+            </label>
+
+            <div className="form-group" style={{ marginBottom:10 }}>
+              <label>Spelregeltekst (zichtbaar op het stemformulier)</label>
+              <textarea
+                rows={5}
+                value={votingRulesText}
+                onChange={e => setVotingRulesText(e.target.value)}
+                placeholder={'Voorbeeld:\n- Geen stem-bombs of georganiseerde acties\n- Maximaal 1 nummer per artiest\n- Bij twijfel kan een stem ongeldig worden verklaard'}
+              />
+            </div>
+
+            <div className="form-group" style={{ marginBottom:0 }}>
+              <label>Maximaal aantal nummers per artiest</label>
+              <input
+                type="number"
+                min={0}
+                max={10}
+                value={maxTracksPerArtist}
+                onChange={e => setMaxTracksPerArtist(Math.max(0, Number(e.target.value) || 0))}
+              />
+              <span className="helper-text">
+                0 = geen automatische limiet. Zet bijvoorbeeld 1 om stem-bombs met 3 nummers van dezelfde artiest te blokkeren.
+              </span>
+            </div>
+          </details>
+
           <div className="form-group">
             <label>Achtergrondafbeelding</label>
             <input type="file" accept="image/*" onChange={e => setBgFile(e.target.files[0])} />
