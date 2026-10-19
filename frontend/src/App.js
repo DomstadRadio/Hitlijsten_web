@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import AdminPage    from './pages/AdminPage';
 import VotePage     from './pages/VotePage';
 import VerifyPage   from './pages/VerifyPage';
+import TokenVerifyPage from './pages/TokenVerifyPage';
 import SubmitPage   from './pages/SubmitPage';
 import ThankYouPage from './pages/ThankYouPage';
 import ResultsPage  from './pages/ResultsPage';
@@ -40,9 +41,10 @@ export default function App() {
         <Route path="/admin/*" element={<AdminPage />} />
 
         {/* Publiek stemformulier */}
-        <Route path="/stem/:slug"                  element={<VotePage />} />
-        <Route path="/stem/:slug/verify/:token"    element={<VerifyPage />} />
-        <Route path="/stem/:slug/stemmen/:token"   element={<SubmitPage />} />
+        <Route path="/stem/:slug"                    element={<VotePage />} />
+        <Route path="/stem/:slug/verify/:token"      element={<VerifyPage />} />
+        <Route path="/stem/:slug/verificatie/:token" element={<TokenVerifyPage />} />
+        <Route path="/stem/:slug/stemmen/:token"     element={<SubmitPage />} />
         <Route path="/stem/:slug/bedankt"          element={<ThankYouPage />} />
         <Route path="/stem/:slug/resultaten"       element={<ResultsPage />} />
 

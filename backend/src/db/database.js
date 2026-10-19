@@ -66,6 +66,8 @@ function getDb() {
   safeAddColumn(_db, 'lists',         'voting_rules_text',       'TEXT DEFAULT NULL');
   safeAddColumn(_db, 'lists',         'voting_rules_required',   'INTEGER NOT NULL DEFAULT 0');
   safeAddColumn(_db, 'lists',         'max_tracks_per_artist',   'INTEGER NOT NULL DEFAULT 0');
+  // Feature: verificatie code timeout (24 uur)
+  safeAddColumn(_db, 'registrations', 'code_expires_at',         'TEXT DEFAULT NULL');
   // Feature: audit log tabel
   try {
     _db.exec(`

@@ -58,7 +58,8 @@ async function sendMail({ to, subject, html }) {
   );
 }
 
-async function sendVerificationEmail({ to, name, listName, code }) {
+async function sendVerificationEmail({ to, name, listName, code, verifyToken, listSlug }) {
+  const verifyUrl = `https://domstadradio.nl/stem/${listSlug}/verificatie/${verifyToken}`;
   await sendMail({
     to,
     subject: `Je verificatiecode voor ${listName}`,
@@ -66,13 +67,21 @@ async function sendVerificationEmail({ to, name, listName, code }) {
       <div style="font-family:sans-serif;max-width:560px;margin:auto">
         <h2>Hallo ${name || 'stemmer'}!</h2>
         <p>Je hebt je aangemeld om te stemmen voor <strong>${listName}</strong>.</p>
-        <p>Voer de onderstaande code in op de stempagina:</p>
+        
+        <p style="text-align:center;margin:32px 0">
+          <a href="${verifyUrl}" style="display:inline-block;background:#e00;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">
+            → Start stemmen
+          </a>
+        </p>
+        
+        <p>Of voer handmatig deze code in:</p>
         <p style="text-align:center;margin:32px 0">
           <span style="display:inline-block;background:#f5f5f5;border:2px solid #e00;border-radius:12px;padding:18px 36px;font-size:42px;font-weight:bold;letter-spacing:10px;color:#111">
             ${code}
           </span>
         </p>
-        <p>Stem op tijd, de link is beperkt geldig.</p>
+        
+        <p><strong>Geldigheidsduur:</strong> Deze link is 24 uur geldig. Daarna moet je een nieuwe code aanvragen.</p>
         <p style="font-size:12px;color:#888">Als je je niet hebt aangemeld, kun je deze e-mail negeren.</p>
         <hr>
         <p style="font-size:11px;color:#aaa">Domstad Radio — Utrecht</p>

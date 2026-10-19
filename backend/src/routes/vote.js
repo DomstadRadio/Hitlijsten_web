@@ -74,16 +74,18 @@ router.post('/:slug/register', async (req, res) => {
 
   const token = uuidv4();
   const code  = String(Math.floor(100000 + Math.random() * 900000));
+  // Code geldig voor 24 uur
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19);
 
   if (existingEmail) {
     // Opnieuw code sturen
-    db.prepare('UPDATE registrations SET verify_token = ?, verify_code = ?, machine_id = ?, name = ?, phone = ? WHERE id = ?')
-      .run(token, code, machineId || null, name || null, phone || null, existingEmail.id);
+    db.prepare('UPDATE registrations SET verify_token = ?, verify_code = ?, code_expires_at = ?, machine_id = ?, name = ?, phone = ? WHERE id = ?')
+      .run(token, code, expiresAt, machineId || null, name || null, phone || null, existingEmail.id);
   } else {
     db.prepare(`
-      INSERT INTO registrations (list_id, email, name, phone, verify_token, verify_code, machine_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(list.id, emailAddr.toLowerCase(), name || null, phone || null, token, code, machineId || null);
+      INSERT INTO registrations (list_id, email, name, phone, verify_token, verify_code, code_expires_at, machine_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(list.id, emailAddr.toLowerCase(), name || null, phone || null, token, code, expiresAt, machineId || null);
   }
 
   try {
@@ -92,6 +94,8 @@ router.post('/:slug/register', async (req, res) => {
       name,
       listName: list.name,
       code,
+      verifyToken: token,
+      listSlug: list.slug,
     });
   } catch (mailErr) {
     console.error('E-mail versturen mislukt:', mailErr.message);
@@ -116,6 +120,15 @@ router.post('/:slug/verify-code', (req, res) => {
 
   if (!reg) return res.status(400).json({ error: 'Onjuiste code. Controleer je e-mail en probeer opnieuw.' });
 
+  // Check of code niet verlopen is
+  if (reg.code_expires_at) {
+    const now = new Date();
+    const expiresAt = new Date(reg.code_expires_at);
+    if (now > expiresAt) {
+      return res.status(403).json({ error: 'Verificatiecode is verlopen. Vraag een nieuwe aan.' });
+    }
+  }
+
   if (!reg.verified) {
     db.prepare('UPDATE registrations SET verified = 1 WHERE id = ?').run(reg.id);
   }
@@ -139,6 +152,15 @@ router.get('/:slug/verify/:token', (req, res) => {
   ).get(req.params.token);
 
   if (!reg) return res.status(404).json({ error: 'Ongeldige of verlopen link' });
+
+  // Check of code niet verlopen is
+  if (reg.code_expires_at) {
+    const now = new Date();
+    const expiresAt = new Date(reg.code_expires_at);
+    if (now > expiresAt) {
+      return res.status(403).json({ error: 'Verificatiecode is verlopen. Vraag een nieuwe aan.' });
+    }
+  }
 
   const list = db.prepare('SELECT * FROM lists WHERE id = ?').get(reg.list_id);
   if (!list || list.slug !== req.params.slug) {
